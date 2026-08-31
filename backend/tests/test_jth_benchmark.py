@@ -1,5 +1,6 @@
 from app.services.jth_benchmark import (
-    EXCLUDED_MATCHING_FIELDS, QueryMetrics, _paired_bootstrap_ci, keyword_score, query_metrics, structured_score,
+    EXCLUDED_MATCHING_FIELDS, STRUCTURED_WEIGHTS, QueryMetrics, _paired_bootstrap_ci,
+    keyword_score, query_metrics, structured_score, surface_attribute_score,
 )
 
 
@@ -24,6 +25,32 @@ def test_structured_matcher_uses_multiple_relevant_attributes():
     weak = {"skills": "python", "job_category": "sales", "expertise_area": "sales"}
     assert structured_score(job, strong) > structured_score(job, weak)
     assert keyword_score(job, strong) == keyword_score(job, weak)
+
+
+def test_surface_attribute_baseline_is_stronger_than_skill_only_keyword():
+    job = {"skills": "python", "job_category": "data engineer", "expertise_area": "data"}
+    aligned = {"skills": "python", "job_category": "data engineer", "expertise_area": "data"}
+    unrelated = {"skills": "python", "job_category": "sales", "expertise_area": "sales"}
+    assert keyword_score(job, aligned) == keyword_score(job, unrelated)
+    assert surface_attribute_score(job, aligned) > surface_attribute_score(job, unrelated)
+
+
+def test_structured_weights_are_normalized_and_use_extended_job_evidence():
+    assert abs(sum(STRUCTURED_WEIGHTS.values()) - 1.0) < 1e-12
+    job = {
+        "skills": "python", "llm_industry_domains": "fintech",
+        "llm_required_languages_spoken": "french", "llm_required_lowest_diploma": "master",
+        "llm_seniority_level": "senior",
+    }
+    aligned = {
+        "skills": "python", "llm_industry_domains": "fintech", "llm_languages_spoken": "french",
+        "llm_highest_diploma": "phd", "llm_seniority_level": "lead",
+    }
+    weak = {
+        "skills": "python", "llm_industry_domains": "retail", "llm_languages_spoken": "english",
+        "llm_highest_diploma": "bachelor", "llm_seniority_level": "junior",
+    }
+    assert structured_score(job, aligned) > structured_score(job, weak)
 
 
 def test_protected_attributes_cannot_change_scores():

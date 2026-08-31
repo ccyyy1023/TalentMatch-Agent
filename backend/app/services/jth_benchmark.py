@@ -31,6 +31,34 @@ EXCLUDED_MATCHING_FIELDS = {
     "llm_has_portfolio_or_github_or_website",
 }
 
+# Selected without touching the 2024+ test set: random search on 2022 jobs,
+# then model selection on 2023 jobs. Bounds keep skills and job attributes
+# dominant so the scorer remains interpretable rather than becoming an
+# unconstrained weak-label optimizer.
+STRUCTURED_WEIGHTS = {
+    "skill_coverage": 0.3421465380525026,
+    "skill_overlap": 0.11084738577146244,
+    "category_match": 0.1046116649628787,
+    "expertise_match": 0.05710898865589636,
+    "contract_match": 0.06875143421090658,
+    "experience_match": 0.06971594257754461,
+    "industry_coverage": 0.06402773948426158,
+    "soft_skill_coverage": 0.013926439075495239,
+    "language_coverage": 0.01803293189242716,
+    "certification_coverage": 0.02044010779994737,
+    "seniority_match": 0.04823727740371755,
+    "diploma_match": 0.08215355011295973,
+}
+
+SENIORITY_LEVELS = {
+    "intern": 0, "entry": 1, "junior": 1, "mid": 2, "middle": 2,
+    "senior": 3, "lead": 4, "manager": 4, "director": 5, "executive": 6,
+}
+DIPLOMA_LEVELS = {
+    "none": 0, "high school": 1, "associate": 2, "bachelor": 3,
+    "master": 4, "mba": 4, "phd": 5, "doctorate": 5,
+}
+
 
 @dataclass(frozen=True)
 class QueryMetrics:
@@ -72,9 +100,59 @@ def _years_lower_bound(value: str) -> float | None:
         return None
 
 
+def _token_coverage_or_neutral(required: set[str], available: set[str]) -> float:
+    """Return neutral evidence when a job does not specify the attribute."""
+    return _coverage(required, available) if required else 0.5
+
+
+def _ordinal(value: str, levels: dict[str, int]) -> int | None:
+    normalized = " ".join(value.lower().replace("'s", "").split())
+    if not normalized:
+        return None
+    for label, rank in sorted(levels.items(), key=lambda item: -len(item[0])):
+        if label in normalized:
+            return rank
+    return None
+
+
+def _ordinal_match(required: str, available: str, levels: dict[str, int]) -> float:
+    required_rank = _ordinal(required, levels)
+    available_rank = _ordinal(available, levels)
+    if required_rank is None or available_rank is None:
+        return 0.5
+    return 1.0 if available_rank >= required_rank else max(0.0, available_rank / max(required_rank, 1))
+
+
 def keyword_score(job: dict[str, str], candidate: dict[str, str]) -> float:
     """Transparent surface-keyword baseline using only original skill fields."""
     return _coverage(_tokens(job.get("skills", "")), _tokens(candidate.get("skills", "")))
+
+
+def surface_attribute_score(job: dict[str, str], candidate: dict[str, str]) -> float:
+    """Stronger baseline using only the original, non-LLM attribute columns."""
+    job_skills = _tokens(job.get("skills", ""))
+    candidate_skills = _tokens(candidate.get("skills", ""))
+    categories = _tokens(job.get("job_category", ""))
+    candidate_categories = _tokens(candidate.get("job_category", ""))
+    expertise = _tokens(job.get("expertise_area", ""))
+    candidate_expertise = _tokens(candidate.get("expertise_area", ""))
+    contract_match = float(
+        bool(job.get("contract_type"))
+        and job.get("contract_type", "").strip().lower() == candidate.get("contract_type", "").strip().lower()
+    )
+    job_years = _years_lower_bound(job.get("years_experience", ""))
+    candidate_years = _years_lower_bound(candidate.get("years_experience", ""))
+    experience_match = 0.5
+    if job_years is not None and candidate_years is not None:
+        experience_match = min(1.0, candidate_years / job_years) if job_years > 0 else 1.0
+    return (
+        0.45 * _coverage(job_skills, candidate_skills)
+        + 0.10 * _overlap(job_skills, candidate_skills)
+        + 0.20 * float(bool(categories & candidate_categories))
+        + 0.10 * float(bool(expertise & candidate_expertise))
+        + 0.05 * contract_match
+        + 0.10 * experience_match
+    )
 
 
 def structured_score(job: dict[str, str], candidate: dict[str, str]) -> float:
@@ -108,10 +186,37 @@ def structured_score(job: dict[str, str], candidate: dict[str, str]) -> float:
     if job_years is not None and candidate_years is not None:
         experience_match = min(1.0, candidate_years / job_years) if job_years > 0 else 1.0
 
-    return (
-        0.45 * skill_coverage + 0.10 * skill_overlap + 0.20 * category_match
-        + 0.10 * expertise_match + 0.05 * contract_match + 0.10 * experience_match
-    )
+    features = {
+        "skill_coverage": skill_coverage,
+        "skill_overlap": skill_overlap,
+        "category_match": category_match,
+        "expertise_match": expertise_match,
+        "contract_match": contract_match,
+        "experience_match": experience_match,
+        "industry_coverage": _token_coverage_or_neutral(
+            _tokens(job.get("llm_industry_domains", "")),
+            _tokens(candidate.get("llm_industry_domains", "")),
+        ),
+        "soft_skill_coverage": _token_coverage_or_neutral(
+            _tokens(job.get("llm_soft_skills", "")),
+            _tokens(candidate.get("llm_soft_skills", "")),
+        ),
+        "language_coverage": _token_coverage_or_neutral(
+            _tokens(job.get("llm_required_languages_spoken", "")),
+            _tokens(candidate.get("llm_languages_spoken", "")),
+        ),
+        "certification_coverage": _token_coverage_or_neutral(
+            _tokens(job.get("llm_certifications", "")),
+            _tokens(candidate.get("llm_certifications", "")),
+        ),
+        "seniority_match": _ordinal_match(
+            job.get("llm_seniority_level", ""), candidate.get("llm_seniority_level", ""), SENIORITY_LEVELS,
+        ),
+        "diploma_match": _ordinal_match(
+            job.get("llm_required_lowest_diploma", ""), candidate.get("llm_highest_diploma", ""), DIPLOMA_LEVELS,
+        ),
+    }
+    return sum(STRUCTURED_WEIGHTS[name] * value for name, value in features.items())
 
 
 def _dcg(labels: list[int], k: int) -> float:
@@ -162,6 +267,19 @@ def _paired_bootstrap_ci(
     return output
 
 
+def _ndcg_win_tie_loss(left: list[QueryMetrics], right: list[QueryMetrics]) -> dict[str, int]:
+    wins = ties = losses = 0
+    for baseline, candidate in zip(left, right):
+        delta = candidate.ndcg_at_5 - baseline.ndcg_at_5
+        if delta > 1e-12:
+            wins += 1
+        elif delta < -1e-12:
+            losses += 1
+        else:
+            ties += 1
+    return {"wins": wins, "ties": ties, "losses": losses}
+
+
 def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int = 5) -> dict:
     candidates = _read_csv(data_dir / "candidates.csv", "candidate_id")
     jobs = _read_csv(data_dir / "jobs.csv", "job_id")
@@ -172,8 +290,8 @@ def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int 
                 applications[row["job_id"]].append(row)
 
     baseline_rows: list[QueryMetrics] = []
+    surface_rows: list[QueryMetrics] = []
     structured_rows: list[QueryMetrics] = []
-    wins = ties = losses = 0
     evaluated_pairs = 0
     stage_counts: dict[str, int] = defaultdict(int)
 
@@ -188,25 +306,28 @@ def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int 
             stage_counts[row["last_stage_reached"]] += 1
         evaluated_pairs += len(pool)
         baseline_order = sorted(labels, key=lambda cid: (-keyword_score(job, candidates[cid]), cid))
+        surface_order = sorted(labels, key=lambda cid: (-surface_attribute_score(job, candidates[cid]), cid))
         structured_order = sorted(labels, key=lambda cid: (-structured_score(job, candidates[cid]), cid))
         baseline = query_metrics(baseline_order, labels)
+        surface = query_metrics(surface_order, labels)
         structured = query_metrics(structured_order, labels)
         baseline_rows.append(baseline)
+        surface_rows.append(surface)
         structured_rows.append(structured)
-        delta = structured.ndcg_at_5 - baseline.ndcg_at_5
-        if delta > 1e-12:
-            wins += 1
-        elif delta < -1e-12:
-            losses += 1
-        else:
-            ties += 1
 
     baseline_summary = _mean_metrics(baseline_rows)
+    surface_summary = _mean_metrics(surface_rows)
     structured_summary = _mean_metrics(structured_rows)
     return {
         "benchmark": "JTH recruiter-history ranking",
         "label_type": "behavioral weak label from last_stage_reached; not ground-truth job fit",
-        "split": {"job_create_date_gte": cutoff, "minimum_applicants": min_pool},
+        "split": {
+            "job_create_date_gte": cutoff,
+            "minimum_applicants": min_pool,
+            "weight_tuning": "2022 jobs",
+            "weight_selection": "2023 jobs",
+            "sealed_test": "2024+ jobs",
+        },
         "scope": {
             "queries": len(structured_rows), "candidate_job_pairs": evaluated_pairs,
             "relevant_stage_minimum": "Resume Sent", "stage_counts": dict(sorted(stage_counts.items())),
@@ -214,12 +335,19 @@ def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int 
         "protected_fields_used": False,
         "excluded_matching_fields": sorted(EXCLUDED_MATCHING_FIELDS),
         "keyword_baseline": baseline_summary,
+        "surface_attribute_baseline": surface_summary,
         "structured_matcher": structured_summary,
         "delta_structured_minus_keyword": {
             key: round(structured_summary[key] - baseline_summary[key], 4) for key in structured_summary
         },
+        "delta_structured_minus_surface_attribute": {
+            key: round(structured_summary[key] - surface_summary[key], 4) for key in structured_summary
+        },
         "paired_bootstrap_95ci_delta": _paired_bootstrap_ci(baseline_rows, structured_rows),
-        "per_query_ndcg_comparison": {"wins": wins, "ties": ties, "losses": losses},
+        "paired_bootstrap_95ci_delta_vs_surface_attribute": _paired_bootstrap_ci(surface_rows, structured_rows),
+        "per_query_ndcg_comparison": _ndcg_win_tie_loss(baseline_rows, structured_rows),
+        "per_query_ndcg_comparison_vs_surface_attribute": _ndcg_win_tie_loss(surface_rows, structured_rows),
+        "structured_weights": {key: round(value, 6) for key, value in STRUCTURED_WEIGHTS.items()},
         "limitations": [
             "Only actual historical applicant pools are ranked; non-applicants are not sampled as negatives.",
             "Recruiter progression is affected by historical policy and bias and is only a weak relevance proxy.",
