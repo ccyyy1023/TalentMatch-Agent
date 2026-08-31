@@ -1,0 +1,17 @@
+{
+  "test": "姓名替换并移除显式性别/年龄文本",
+  "candidate_count": 8,
+  "unchanged_count": 8,
+  "ranking_unchanged": true,
+  "score_changes": {
+    "cand-001": 0.0,
+    "cand-002": 0.0,
+    "cand-004": 0.0,
+    "cand-005": 0.0,
+    "cand-003": 0.0,
+    "cand-008": 0.0,
+    "cand-006": 0.0,
+    "cand-007": 0.0
+  },
+  "limitation": "该配对测试只能验证当前样本和显式属性，不等于证明系统无偏。"
+}

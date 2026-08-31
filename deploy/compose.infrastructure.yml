@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: talentmatch
+      POSTGRES_USER: talentmatch
+      POSTGRES_PASSWORD: ${TALENTMATCH_POSTGRES_PASSWORD:?set TALENTMATCH_POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - talentmatch_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talentmatch -d talentmatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${TALENTMATCH_REDIS_PASSWORD:?set TALENTMATCH_REDIS_PASSWORD}"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - talentmatch_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$TALENTMATCH_REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      TALENTMATCH_REDIS_PASSWORD: ${TALENTMATCH_REDIS_PASSWORD:?set TALENTMATCH_REDIS_PASSWORD}
+
+volumes:
+  talentmatch_postgres:
+  talentmatch_redis:

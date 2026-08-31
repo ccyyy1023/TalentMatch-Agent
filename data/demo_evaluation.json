@@ -1,0 +1,95 @@
+{
+  "run_id": "run-e6f0293ef8b4",
+  "ranking": [
+    {
+      "candidate_id": "cand-001",
+      "score": 96.66,
+      "recommendation": "recommended"
+    },
+    {
+      "candidate_id": "cand-002",
+      "score": 89.98,
+      "recommendation": "manual_review"
+    },
+    {
+      "candidate_id": "cand-004",
+      "score": 79.96,
+      "recommendation": "manual_review"
+    },
+    {
+      "candidate_id": "cand-005",
+      "score": 75.67,
+      "recommendation": "manual_review"
+    },
+    {
+      "candidate_id": "cand-003",
+      "score": 68.38,
+      "recommendation": "manual_review"
+    },
+    {
+      "candidate_id": "cand-008",
+      "score": 44.03,
+      "recommendation": "hard_requirement_not_met"
+    },
+    {
+      "candidate_id": "cand-006",
+      "score": 29.76,
+      "recommendation": "hard_requirement_not_met"
+    },
+    {
+      "candidate_id": "cand-007",
+      "score": 26.52,
+      "recommendation": "hard_requirement_not_met"
+    }
+  ],
+  "metrics": {
+    "run_id": "run-e6f0293ef8b4",
+    "candidate_count": 8,
+    "labeled_count": 8,
+    "ndcg_at_5": 1.0,
+    "precision_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "mrr": 1.0,
+    "evidence_coverage": 1.0,
+    "unsupported_claim_rate": 0.0,
+    "manual_review_rate": 0.5
+  },
+  "traces": [
+    {
+      "node": "jd_analyzer_agent",
+      "status": "completed",
+      "detail": "规则抽取11项岗位要求",
+      "elapsed_ms": 13.6529999999766
+    },
+    {
+      "node": "candidate_evidence_agents",
+      "status": "completed",
+      "detail": "解析8份候选人材料（rules:8）",
+      "elapsed_ms": 7.712399999945774
+    },
+    {
+      "node": "deterministic_matching_engine",
+      "status": "completed",
+      "detail": "使用透明权重、硬性条件和证据强度完成评分；敏感属性未进入评分",
+      "elapsed_ms": 0.8463000012852717
+    },
+    {
+      "node": "conflict_reviewer_agent",
+      "status": "completed",
+      "detail": "复核8名候选人的弱证据、硬性条件和时间线冲突",
+      "elapsed_ms": 0.06599999869649764
+    },
+    {
+      "node": "compliance_agent",
+      "status": "completed",
+      "detail": "确认关闭自动拒绝，屏蔽姓名及敏感属性，保留人工复核出口",
+      "elapsed_ms": 0.010900001143454574
+    },
+    {
+      "node": "ranking_and_explanation",
+      "status": "completed",
+      "detail": "按透明匹配分与置信度排序，并保留每项结论的证据ID",
+      "elapsed_ms": 0.006299998858594336
+    }
+  ]
+}

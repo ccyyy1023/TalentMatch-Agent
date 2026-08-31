@@ -1,0 +1,160 @@
+{
+  "run_id": "run-e0043e29e2d9",
+  "mode": "ollama",
+  "model_info": {
+    "provider": "ollama",
+    "chat_model": "qwen2.5:7b",
+    "embed_model": "embeddinggemma",
+    "available": true,
+    "models": [
+      "embeddinggemma:latest",
+      "qwen2.5:7b"
+    ],
+    "chat_model_ready": true,
+    "embed_model_ready": true
+  },
+  "job_requirement_count": 11,
+  "candidate_score": 96.66,
+  "candidate_recommendation": "recommended",
+  "criteria": [
+    {
+      "requirement": "REST API能力",
+      "priority": "context",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-11"
+      ],
+      "explanation": "匹配REST API，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "本科及以上学历，计算机或相关专业",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-3"
+      ],
+      "explanation": "简历学历为本科，满足要求"
+    },
+    {
+      "requirement": "Python能力",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-4"
+      ],
+      "explanation": "匹配Python，证据来自work：2022-2026 AI应用开发工程师，4年Python后端开发经验。"
+    },
+    {
+      "requirement": "至少2年相关经验",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-5"
+      ],
+      "explanation": "可识别经验约4年，岗位要求2年"
+    },
+    {
+      "requirement": "Fastapi能力",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-6"
+      ],
+      "explanation": "匹配Fastapi，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "REST API能力",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-11"
+      ],
+      "explanation": "匹配REST API，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "Langgraph能力",
+      "priority": "hard",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-8"
+      ],
+      "explanation": "匹配Langgraph，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "大语言模型能力",
+      "priority": "preferred",
+      "status": "partial",
+      "score": 0.45,
+      "evidence_ids": [
+        "cand-001-ev-7"
+      ],
+      "explanation": "存在相邻技能RAG，不能视为完全满足大语言模型"
+    },
+    {
+      "requirement": "RAG能力",
+      "priority": "preferred",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-7"
+      ],
+      "explanation": "匹配RAG，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "Docker能力",
+      "priority": "preferred",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-9"
+      ],
+      "explanation": "匹配Docker，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    },
+    {
+      "requirement": "Postgresql能力",
+      "priority": "preferred",
+      "status": "matched",
+      "score": 1.0,
+      "evidence_ids": [
+        "cand-001-ev-10"
+      ],
+      "explanation": "匹配Postgresql，证据来自project：企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、Postgr"
+    }
+  ],
+  "findings": [],
+  "trace_statuses": [
+    {
+      "node": "jd_analyzer_agent",
+      "status": "completed",
+      "detail": "Ollama抽取11项岗位要求"
+    },
+    {
+      "node": "candidate_evidence_agents",
+      "status": "completed",
+      "detail": "解析1份候选人材料（ollama:1）"
+    },
+    {
+      "node": "deterministic_matching_engine",
+      "status": "completed",
+      "detail": "使用透明权重、硬性条件和证据强度完成评分；敏感属性未进入评分"
+    },
+    {
+      "node": "compliance_agent",
+      "status": "completed",
+      "detail": "确认关闭自动拒绝，屏蔽姓名及敏感属性，保留人工复核出口"
+    },
+    {
+      "node": "ranking_and_explanation",
+      "status": "completed",
+      "detail": "按透明匹配分与置信度排序，并保留每项结论的证据ID"
+    }
+  ],
+  "elapsed_ms": 38985.58
+}

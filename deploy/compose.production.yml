@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: talentmatch
+      POSTGRES_USER: talentmatch
+      POSTGRES_PASSWORD: ${TALENTMATCH_POSTGRES_PASSWORD:?set TALENTMATCH_POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talentmatch -d talentmatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      TALENTMATCH_REDIS_PASSWORD: ${TALENTMATCH_REDIS_PASSWORD:?set TALENTMATCH_REDIS_PASSWORD}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${TALENTMATCH_REDIS_PASSWORD:?set TALENTMATCH_REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$TALENTMATCH_REDIS_PASSWORD ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    environment: &backend_environment
+      TALENTMATCH_DATABASE_URL: postgresql+psycopg://talentmatch:${TALENTMATCH_POSTGRES_PASSWORD}@postgres:5432/talentmatch
+      TALENTMATCH_TASK_BACKEND: redis
+      TALENTMATCH_REDIS_URL: redis://:${TALENTMATCH_REDIS_PASSWORD}@redis:6379/0
+      TALENTMATCH_OLLAMA_BASE_URL: ${TALENTMATCH_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      TALENTMATCH_ALLOW_ORIGINS: ${TALENTMATCH_ALLOW_ORIGINS:-http://localhost:8080}
+    command: ["python", "-m", "alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment: *backend_environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment: *backend_environment
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${TALENTMATCH_HTTP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

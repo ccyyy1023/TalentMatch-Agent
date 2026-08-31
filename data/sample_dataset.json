@@ -1,0 +1,55 @@
+{
+  "job_description": "岗位名称：AI Agent应用开发工程师\n岗位职责：负责企业级智能体应用的设计、开发与评测，建设可追溯的多智能体工作流和REST API。\n任职要求：\n1. 本科及以上学历，计算机或相关专业；\n2. 必须熟练掌握Python，并具有2年以上相关开发经验；\n3. 要求具备FastAPI接口开发经验，能够完成后端服务与数据模型设计；\n4. 要求掌握LangGraph或同类工作流编排框架；\n5. 熟悉RAG、向量检索和大语言模型应用开发；\n6. 熟悉Docker、PostgreSQL者优先；\n7. 具备良好的问题分析与沟通能力。",
+  "mode": "rules",
+  "enable_semantic_matching": true,
+  "candidates": [
+    {
+      "id": "cand-001",
+      "name": "张晨",
+      "relevance_label": 2,
+      "text": "张晨\n电话：13800000001 邮箱：zhang@example.com\n教育经历\n某大学 计算机科学与技术 本科\n工作经历\n2022-2026 AI应用开发工程师，4年Python后端开发经验。\n项目经历\n企业知识助手：使用FastAPI构建REST API，基于LangGraph设计带条件路由和人工复核的多智能体流程；接入RAG、PostgreSQL与pgvector，使用Docker部署。\n负责建立离线评测集与证据引用检查，将无依据回答率从18%降低至4%。\n专业技能\nPython、FastAPI、LangGraph、RAG、PostgreSQL、Docker、Git"
+    },
+    {
+      "id": "cand-002",
+      "name": "李然",
+      "relevance_label": 2,
+      "text": "李然\n教育经历：软件工程本科\n工作经历\n2023-2026 后端开发工程师，3年Python开发经验。\n项目经历\n使用Python与FastAPI建设模型服务，设计RESTful接口；在客服系统中使用LangChain和RAG完成知识检索，向量库采用Milvus。\n参与Docker容器化与PostgreSQL数据建模，独立编写接口自动化测试。\n技能：Python、FastAPI、LangChain、RAG、Milvus、Docker、PostgreSQL"
+    },
+    {
+      "id": "cand-003",
+      "name": "王璐",
+      "relevance_label": 1,
+      "text": "王璐 女 24岁\n教育经历\n人工智能硕士\n项目经历\n研究生期间使用PyTorch完成文本分类与意图识别实验，使用Python进行数据处理；了解LangGraph、RAG和FastAPI。\n专业技能\nPython、PyTorch、LangGraph、RAG、FastAPI、SQL\n自我评价\n学习能力强，熟悉企业级Agent开发。"
+    },
+    {
+      "id": "cand-004",
+      "name": "赵强",
+      "relevance_label": 1,
+      "text": "赵强\n教育：计算机本科\n工作经历\n2021-2026 Java后端开发，5年微服务经验。\n项目经历\n使用Spring Boot、Redis、MySQL建设订单系统，负责REST API和Docker部署；近期参与Python脚本和大语言模型接口集成。\n技能：Java、Spring Boot、Redis、MySQL、Docker、Python、REST API"
+    },
+    {
+      "id": "cand-005",
+      "name": "陈哲",
+      "relevance_label": 1,
+      "text": "陈哲\n学历：本科\n工作经历\n2024-2026 数据分析师，2年Python与SQL经验。\n项目经历\n使用Python、Pandas和PostgreSQL完成数据分析平台，使用FastAPI发布查询接口；个人项目中使用Ollama构建RAG问答Demo。\n技能：Python、SQL、PostgreSQL、FastAPI、Ollama、RAG"
+    },
+    {
+      "id": "cand-006",
+      "name": "周敏",
+      "relevance_label": 0,
+      "text": "周敏\n教育经历：市场营销本科\n工作经历\n2022-2026 市场运营，负责活动策划、用户增长和竞品分析。\n专业技能\nExcel、PowerPoint、数据分析\n自我评价\n沟通能力强，愿意学习Python和人工智能。"
+    },
+    {
+      "id": "cand-007",
+      "name": "孙浩",
+      "relevance_label": 0,
+      "text": "孙浩\n教育经历：计算机大专\n工作经历\n2025-2026 前端开发，1年JavaScript经验。\n项目经历\n使用Vue和TypeScript开发管理后台，调用后端REST API。\n技能：Vue、JavaScript、TypeScript、Git"
+    },
+    {
+      "id": "cand-008",
+      "name": "匿名候选人",
+      "relevance_label": 0,
+      "text": "个人总结\n精通Python、FastAPI、LangGraph、RAG、Docker、PostgreSQL，拥有5年AI开发经验。\n技能列表\nPython、FastAPI、LangGraph、RAG、Docker、PostgreSQL\n说明\n未提供教育、工作单位、项目经历、时间线或可验证成果。"
+    }
+  ]
+}

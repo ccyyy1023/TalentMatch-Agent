@@ -1,0 +1,16 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+httpx==0.28.1
+langgraph==0.6.6
+python-multipart==0.0.20
+pypdf==6.0.0
+python-docx==1.2.0
+pytest==8.4.1
+pytest-cov==6.2.1
+redis==8.1.0
+rq==2.11.0
+SQLAlchemy==2.0.52
+alembic==1.19.1
+psycopg[binary]==3.3.4
+prometheus-client==0.22.1
