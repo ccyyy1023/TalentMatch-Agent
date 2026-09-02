@@ -22,6 +22,17 @@ STAGE_RELEVANCE = {
     "Offer Accepted": 4,
 }
 
+
+def highest_stage_labels(pool: list[dict[str, str]]) -> dict[str, int]:
+    """Collapse repeated stage records to each candidate's highest observed progression."""
+    labels: dict[str, int] = {}
+    for row in pool:
+        candidate_id = row["candidate_id"]
+        labels[candidate_id] = max(
+            labels.get(candidate_id, 0), STAGE_RELEVANCE.get(row["last_stage_reached"], 0),
+        )
+    return labels
+
 # These columns are deliberately unavailable to both scorers. They are listed
 # explicitly so a future schema change cannot silently introduce them.
 EXCLUDED_MATCHING_FIELDS = {
@@ -157,6 +168,12 @@ def surface_attribute_score(job: dict[str, str], candidate: dict[str, str]) -> f
 
 def structured_score(job: dict[str, str], candidate: dict[str, str]) -> float:
     """Evidence-style attribute matcher; no interaction or protected fields."""
+    features = structured_features(job, candidate)
+    return sum(STRUCTURED_WEIGHTS[name] * value for name, value in features.items())
+
+
+def structured_features(job: dict[str, str], candidate: dict[str, str]) -> dict[str, float]:
+    """Return the transparent feature vector used by the fixed linear matcher."""
     job_skills = _tokens(
         job.get("skills", ""), job.get("llm_hard_skills", ""),
         job.get("llm_programming_languages", ""), job.get("llm_tools_technologies", ""),
@@ -186,7 +203,7 @@ def structured_score(job: dict[str, str], candidate: dict[str, str]) -> float:
     if job_years is not None and candidate_years is not None:
         experience_match = min(1.0, candidate_years / job_years) if job_years > 0 else 1.0
 
-    features = {
+    return {
         "skill_coverage": skill_coverage,
         "skill_overlap": skill_overlap,
         "category_match": category_match,
@@ -216,7 +233,6 @@ def structured_score(job: dict[str, str], candidate: dict[str, str]) -> float:
             job.get("llm_required_lowest_diploma", ""), candidate.get("llm_highest_diploma", ""), DIPLOMA_LEVELS,
         ),
     }
-    return sum(STRUCTURED_WEIGHTS[name] * value for name, value in features.items())
 
 
 def _dcg(labels: list[int], k: int) -> float:
@@ -293,18 +309,20 @@ def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int 
     surface_rows: list[QueryMetrics] = []
     structured_rows: list[QueryMetrics] = []
     evaluated_pairs = 0
+    evaluated_events = 0
     stage_counts: dict[str, int] = defaultdict(int)
 
     for job_id, pool in applications.items():
         job = jobs[job_id]
-        if job.get("create_date", "") < cutoff or len(pool) < min_pool:
+        if job.get("create_date", "") < cutoff:
             continue
-        labels = {row["candidate_id"]: STAGE_RELEVANCE.get(row["last_stage_reached"], 0) for row in pool}
-        if len(set(labels.values())) < 2 or not any(value >= 2 for value in labels.values()):
+        labels = highest_stage_labels(pool)
+        if len(labels) < min_pool or len(set(labels.values())) < 2 or not any(value >= 2 for value in labels.values()):
             continue
         for row in pool:
             stage_counts[row["last_stage_reached"]] += 1
-        evaluated_pairs += len(pool)
+        evaluated_pairs += len(labels)
+        evaluated_events += len(pool)
         baseline_order = sorted(labels, key=lambda cid: (-keyword_score(job, candidates[cid]), cid))
         surface_order = sorted(labels, key=lambda cid: (-surface_attribute_score(job, candidates[cid]), cid))
         structured_order = sorted(labels, key=lambda cid: (-structured_score(job, candidates[cid]), cid))
@@ -329,7 +347,8 @@ def run_jth_benchmark(data_dir: Path, cutoff: str = "2024-01-01", min_pool: int 
             "sealed_test": "2024+ jobs",
         },
         "scope": {
-            "queries": len(structured_rows), "candidate_job_pairs": evaluated_pairs,
+            "queries": len(structured_rows), "unique_candidate_job_pairs": evaluated_pairs,
+            "application_stage_records": evaluated_events,
             "relevant_stage_minimum": "Resume Sent", "stage_counts": dict(sorted(stage_counts.items())),
         },
         "protected_fields_used": False,

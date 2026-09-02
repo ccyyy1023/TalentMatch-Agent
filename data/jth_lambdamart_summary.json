@@ -1,0 +1,36 @@
+{
+  "benchmark": "JTH anchored LambdaMART temporal holdout",
+  "selection": "rolling validation on 2023 and 2024",
+  "test": {
+    "year": 2025,
+    "eligible_jobs": 49,
+    "unique_candidate_job_pairs": 1012
+  },
+  "fixed_structured": {
+    "ndcg_at_5": 0.5010,
+    "precision_at_3": 0.2857,
+    "recall_at_5": 0.5091,
+    "mrr": 0.5123
+  },
+  "anchored_lambdamart": {
+    "ndcg_at_5": 0.5156,
+    "precision_at_3": 0.2857,
+    "recall_at_5": 0.5295,
+    "mrr": 0.5333
+  },
+  "delta": {
+    "ndcg_at_5": 0.0146,
+    "precision_at_3": 0.0000,
+    "recall_at_5": 0.0204,
+    "mrr": 0.0210
+  },
+  "ndcg_delta_paired_bootstrap_95ci": [0.0005, 0.0323],
+  "per_job_ndcg": {"wins": 5, "ties": 44, "losses": 0},
+  "selected_anchor_alpha": 0.1,
+  "activation_gate_passed": true,
+  "limitations": [
+    "Recruiter progression is a behavioral weak label, not ground-truth job fit.",
+    "The holdout has only 49 eligible jobs; report the confidence interval with the point estimate.",
+    "This artifact documents an offline benchmark candidate and is not the production default ranker."
+  ]
+}

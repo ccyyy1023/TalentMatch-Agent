@@ -118,6 +118,8 @@ Pop-Location
 .\.venv\Scripts\python.exe scripts\evaluate_skillspan.py --split test --mode jobbert
 .\scripts\download_jth.ps1
 .\.venv\Scripts\python.exe scripts\evaluate_jth.py
+.\.venv\Scripts\python.exe -m pip install -r requirements-ranking.txt
+.\.venv\Scripts\python.exe scripts\evaluate_jth_lambdamart.py
 .\scripts\download_talentclef.ps1
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef.py --language en
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef.py --language es
@@ -199,7 +201,7 @@ TALENTMATCH_OLLAMA_WORKERS=2
 
 - 中文受控集：6类岗位、60份候选人材料，覆盖48项JD内容类别与优先级联合标注，以及字段抽取、冲突复核消融、排序与成对敏感属性检查；
 - SkillSpan：官方test释放集3,569句、2,265个gold span；固定版本双JobBERT端点的typed exact F1为0.5920、boundary exact F1为0.6090、boundary overlap F1为0.8032，0次推理失败；该结果是同域监督模型专项基线，不是TalentMatch端到端效果；
-- JTH弱标签集：使用2022年岗位调参、2023年岗位选择配置、2024年后366个岗位与8,302个人岗对封存测试；同时比较技能关键词、原始字段多属性基线与结构化匹配，结构化匹配NDCG@5为0.5239；
+- JTH弱标签集：2024+固定基准包含365个岗位、7,850个唯一人岗对和8,297条招聘阶段记录；按最高到达阶段折叠重复记录后，结构化匹配NDCG@5为0.5206，高于技能关键词基线0.4789；另以2023/2024滚动验证锁定锚定式LambdaMART，在2025年49个岗位、1,012个唯一人岗对留出集上将NDCG@5由0.5010提升至0.5156、Recall@5由0.5091提升至0.5295，NDCG增量95%置信区间为[0.0005, 0.0323]。该模型只进入影子评测候选，不替换线上默认规则；
 - TalentCLEF 2026 Task A：接入英/西双语完整职位与简历文本，development每种语言包含10个JD、472份CV和472条专家二元相关标注；BM25用于验证原始文本、全库排序、官方指标及TREC输出链路；固定3个JD/17份CV的Qwen抽取诊断中，Qwen3-4B在保持相同样本排序的同时耗时更低、回退更少，但该开发切片不作为封存效果；
 - TalentCLEF优化复核：完整英文development上的JobBERT技能融合只取得极小内部留出增量；10个JD、60个人岗难例对上，Qwen证据匹配NDCG为0.7761，而加入JobBERT后降至0.6557；两阶段融合也未通过3-JD留出验证，因此相关路径保留为实验开关而非默认能力；
 - 单Agent对照：在5个JD、30个人岗难例对上，单Qwen直接评分NDCG为0.7424，高于同范围证据工作流0.6479，但其双侧原文引用有效率为96.67%，低于证据工作流100%；该小型development消融只用于说明排序与可靠性的取舍，不证明Multi-Agent普遍更优；
