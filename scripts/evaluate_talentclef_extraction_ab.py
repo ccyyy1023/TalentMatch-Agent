@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--positives-per-query", type=int, default=4)
     parser.add_argument("--negatives-per-query", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260901)
+    parser.add_argument("--negative-strategy", choices=("random", "bm25_hard"), default="bm25_hard")
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -46,6 +47,7 @@ def main() -> None:
         positives_per_query=args.positives_per_query,
         negatives_per_query=args.negatives_per_query,
         seed=args.seed,
+        negative_strategy=args.negative_strategy,
     )
     report = {
         "benchmark": "TalentCLEF 2026 Task A extraction A/B",
@@ -58,6 +60,7 @@ def main() -> None:
             "positive_per_query": args.positives_per_query,
             "negative_per_query": args.negatives_per_query,
             "seed": args.seed,
+            "negative_strategy": args.negative_strategy,
             "labels_used_for_training": False,
             "cache_enabled": False,
         },
@@ -66,6 +69,7 @@ def main() -> None:
         "comparison": None,
         "limitations": [
             "This fixed stratified development sample is a model-selection diagnostic, not a sealed test set.",
+            "BM25 hard negatives deliberately stress lexical confounders and do not represent the natural candidate distribution.",
             "TalentCLEF texts are synthetic and privacy-preserving rather than production ATS documents.",
             "Source quote rates measure grounding after application validation; rejected raw model items are not counted.",
             "Extracted-text BM25 measures information retention, not final production matching quality.",

@@ -2,15 +2,35 @@ from __future__ import annotations
 
 import re
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from app.schemas import Evidence, ParsedCandidate, ParsedJD, Priority, Requirement, TraceEvent
 from app.services.ollama_client import OllamaClient, OllamaUnavailable
 from app.services.skill_catalog import display_name, extract_skills, normalize_skill
 from app.services.security import detect_prompt_injection
 
+if TYPE_CHECKING:
+    from app.services.hybrid_skill_extractor import DocumentSkillExtractor
 
-HARD_MARKERS = ("必须", "要求", "精通", "熟练掌握", "至少", "不少于", "本科及以上")
-PREFERRED_MARKERS = ("优先", "加分", "最好", "熟悉", "了解")
+MAX_JOBBERT_JD_REQUIREMENTS = 12
+
+
+HARD_MARKERS = (
+    "必须", "要求", "精通", "熟练掌握", "至少", "不少于", "本科及以上",
+    "must", "required", "requirement", "minimum", "at least",
+)
+PREFERRED_MARKERS = (
+    "优先", "加分", "最好", "熟悉", "了解", "preferred", "nice to have", "plus",
+)
+
+
+def infer_priority(text: str) -> Priority:
+    lowered = text.casefold()
+    if any(marker in lowered for marker in HARD_MARKERS):
+        return Priority.hard
+    if any(marker in lowered for marker in PREFERRED_MARKERS):
+        return Priority.preferred
+    return Priority.context
 
 
 def coerce_optional_number(value) -> float | None:
@@ -28,8 +48,9 @@ def split_units(text: str) -> list[str]:
 
 
 class JDAnalyzer:
-    def __init__(self, ollama: OllamaClient):
+    def __init__(self, ollama: OllamaClient, skill_extractor: "DocumentSkillExtractor | None" = None):
         self.ollama = ollama
+        self.skill_extractor = skill_extractor
 
     def analyze(self, text: str, mode: str) -> tuple[ParsedJD, TraceEvent]:
         started = perf_counter()
@@ -114,7 +135,7 @@ class JDAnalyzer:
         ambiguities: list[str] = []
         seen: set[tuple[str, str]] = set()
         for unit in split_units(text):
-            priority = Priority.hard if any(marker in unit for marker in HARD_MARKERS) else Priority.preferred if any(marker in unit for marker in PREFERRED_MARKERS) else Priority.context
+            priority = infer_priority(unit)
             years_match = re.search(r"(\d+(?:\.\d+)?)\s*年(?:[^，。；;\n]{0,10})?(?:以上|及以上|经验)", unit)
             skills = extract_skills(unit)
             for skill, _ in skills:
@@ -144,6 +165,39 @@ class JDAnalyzer:
                 ))
             if any(marker in unit for marker in ("优秀", "较强", "良好", "相关经验")) and not skills:
                 ambiguities.append(unit)
+        if self.skill_extractor is not None:
+            try:
+                mentions = self.skill_extractor.extract(text)
+            except Exception:
+                mentions = []
+            priority_order = {Priority.hard: 0, Priority.preferred: 1, Priority.context: 2}
+            mentions = sorted(
+                mentions,
+                key=lambda item: (
+                    priority_order[infer_priority(item.source_quote)],
+                    item.label != "knowledge",
+                    len(item.text.split()),
+                    item.start,
+                ),
+            )
+            added = 0
+            for mention in mentions:
+                priority = infer_priority(mention.source_quote)
+                key = (mention.normalized_skill, priority.value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                requirements.append(Requirement(
+                    id=f"req-{len(requirements) + 1}",
+                    text=f"{mention.text} competency",
+                    category="skill",
+                    priority=priority,
+                    normalized_skill=mention.normalized_skill,
+                    source_quote=mention.source_quote,
+                ))
+                added += 1
+                if added >= MAX_JOBBERT_JD_REQUIREMENTS:
+                    break
         if not requirements:
             requirements.append(Requirement(
                 id="req-1", text="岗位整体语义匹配", category="other", priority=Priority.context,
@@ -168,24 +222,30 @@ class CandidateAnalyzer:
         "个人总结": "summary", "自我评价": "summary",
     }
 
-    def __init__(self, ollama: OllamaClient):
+    def __init__(self, ollama: OllamaClient, skill_extractor: "DocumentSkillExtractor | None" = None):
         self.ollama = ollama
+        self.skill_extractor = skill_extractor
 
-    def analyze(self, candidate_id: str, name: str, text: str, mode: str) -> tuple[ParsedCandidate, str]:
+    def analyze(
+        self, candidate_id: str, name: str, text: str, mode: str,
+        target_skills: list[str] | None = None,
+    ) -> tuple[ParsedCandidate, str]:
         security_flags = detect_prompt_injection(text)
         if mode == "ollama" and security_flags:
-            parsed = self._analyze_rules(candidate_id, name, text)
+            parsed = self._analyze_rules(candidate_id, name, text, target_skills)
             parsed.security_flags = security_flags
             return parsed, "security_fallback"
         if mode == "ollama":
             try:
-                parsed = self._analyze_with_llm(candidate_id, name, text)
+                parsed = self._analyze_with_llm(candidate_id, name, text, target_skills)
                 return parsed, "ollama_cache" if getattr(self.ollama, "last_call_cache_hit", False) else "ollama"
             except Exception as exc:
-                return self._analyze_rules(candidate_id, name, text), f"fallback:{type(exc).__name__}:{str(exc)[:80]}"
-        return self._analyze_rules(candidate_id, name, text), "rules"
+                return self._analyze_rules(candidate_id, name, text, target_skills), f"fallback:{type(exc).__name__}:{str(exc)[:80]}"
+        return self._analyze_rules(candidate_id, name, text, target_skills), "rules"
 
-    def _analyze_with_llm(self, candidate_id: str, name: str, text: str) -> ParsedCandidate:
+    def _analyze_with_llm(
+        self, candidate_id: str, name: str, text: str, target_skills: list[str] | None = None,
+    ) -> ParsedCandidate:
         system = (
             "你是简历证据抽取专家。只抽取简历原文明确支持的信息，不推测候选人能力。"
             "输出JSON字段：skills、years_experience、education、evidence、parse_warnings。"
@@ -214,7 +274,7 @@ class CandidateAnalyzer:
             ))
         if not evidence:
             raise OllamaUnavailable("模型没有返回可核验证据")
-        rules_parsed = self._analyze_rules(candidate_id, name, text)
+        rules_parsed = self._analyze_rules(candidate_id, name, text, target_skills)
         merged: list[Evidence] = []
         seen_evidence: set[tuple] = set()
         for item in [*evidence, *rules_parsed.evidence]:
@@ -258,9 +318,12 @@ class CandidateAnalyzer:
             parse_warnings=list(dict.fromkeys(warning_values + rules_parsed.parse_warnings))[:10],
         )
 
-    def _analyze_rules(self, candidate_id: str, name: str, text: str) -> ParsedCandidate:
+    def _analyze_rules(
+        self, candidate_id: str, name: str, text: str, target_skills: list[str] | None = None,
+    ) -> ParsedCandidate:
         section = "unknown"
         evidence: list[Evidence] = []
+        line_sections: dict[str, str] = {}
         for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line:
@@ -270,6 +333,7 @@ class CandidateAnalyzer:
                 if normalized_header == marker or normalized_header.startswith(marker):
                     section = mapped
                     break
+            line_sections[line] = section
             section_strength = {"work": 1.0, "project": 1.0, "skills": 0.65, "education": 0.8, "summary": 0.45}.get(section, 0.55)
             for skill, alias in extract_skills(line):
                 evidence.append(Evidence(
@@ -299,6 +363,30 @@ class CandidateAnalyzer:
                 evidence.append(Evidence(
                     id=f"{candidate_id}-ev-{len(evidence) + 1}", kind="achievement", value=line[:100],
                     source_quote=line[:300], section=section, strength=section_strength,
+                ))
+        if target_skills:
+            from app.services.hybrid_skill_extractor import verify_target_skills
+
+            mentions = verify_target_skills(text, target_skills)
+            existing = {(item.normalized_skill, item.source_quote) for item in evidence if item.normalized_skill}
+            for mention in mentions:
+                key = (mention.normalized_skill, mention.source_quote)
+                if key in existing:
+                    continue
+                existing.add(key)
+                mention_section = line_sections.get(mention.source_quote, "unknown")
+                strength = {
+                    "work": 1.0, "project": 1.0, "skills": 0.65,
+                    "education": 0.8, "summary": 0.45,
+                }.get(mention_section, 0.55)
+                evidence.append(Evidence(
+                    id=f"{candidate_id}-ev-{len(evidence) + 1}",
+                    kind="skill",
+                    value=mention.text,
+                    normalized_skill=mention.normalized_skill,
+                    source_quote=mention.source_quote,
+                    section=mention_section,
+                    strength=strength,
                 ))
         years_values = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)\s*年(?:[^，。；;\n]{0,10})?(?:以上|及以上|经验)", text)]
         years = max(years_values) if years_values else self._estimate_years_from_dates(text)

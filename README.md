@@ -27,6 +27,7 @@
 - 提供GitHub Actions工作流，分别执行后端完整测试和前端生产构建。
 - 内置带三级相关性标签的演示集和 NDCG@5、Precision@3、Recall@5、MRR 等排序指标。
 - 提供中文受控集、SkillSpan、TalentCLEF与JTH四层评测；规则边界、真实岗位技能Span、完整文本排序和规模化结构化排序分开报告。
+- 提供可开关的英文JobBERT岗位技能补充与岗位条件驱动候选人核验；该实验路径默认关闭，只有通过目标数据验证后才允许启用。
 
 ## 架构
 
@@ -101,7 +102,9 @@ Deterministic Matcher ----- 硬性条件 + 权重 + 证据强度
 ### 4. 运行测试与评测
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest backend\tests
+Push-Location backend
+& ..\.venv\Scripts\python.exe -m pytest tests
+Pop-Location
 .\.venv\Scripts\python.exe scripts\evaluate_demo.py
 .\.venv\Scripts\python.exe scripts\compare_baselines.py
 .\.venv\Scripts\python.exe scripts\reliability_audit.py
@@ -117,6 +120,9 @@ Deterministic Matcher ----- 硬性条件 + 权重 + 证据强度
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef.py --language en
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef.py --language es
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef_extraction_ab.py --left-model qwen2.5:7b --right-model qwen3:4b
+.\.venv\Scripts\python.exe scripts\evaluate_talentclef_hybrid.py
+.\.venv\Scripts\python.exe scripts\evaluate_talentclef_hard_ab.py --query-limit 10
+.\.venv\Scripts\python.exe scripts\evaluate_talentclef_agent_ablation.py
 .\.venv\Scripts\python.exe scripts\evaluate_reviewer_heterogeneity.py
 .\.venv\Scripts\python.exe scripts\evaluate_agent_ablation.py
 .\.venv\Scripts\python.exe scripts\security_audit.py
@@ -168,10 +174,14 @@ TALENTMATCH_JD_MODEL=qwen3:4b
 TALENTMATCH_CANDIDATE_MODEL=qwen3:4b
 TALENTMATCH_REVIEWER_MODEL=qwen2.5:7b
 TALENTMATCH_EMBED_MODEL=embeddinggemma
+TALENTMATCH_SKILL_EXTRACTOR=catalog
+TALENTMATCH_JOBBERT_CACHE_DIR=data/external/skillspan_models
 TALENTMATCH_OLLAMA_WORKERS=2
 ```
 
 `TALENTMATCH_CHAT_MODEL`保留为统一兼容配置，三个Agent变量可以单独覆盖。当前默认让JD与候选人抽取使用Qwen3-4B，让Conflict Reviewer使用Qwen2.5-7B；Reviewer输出还必须经过确定性证据质量门。API返回的`model_info.agent_models`和健康检查会公开每个Agent实际使用的模型，避免配置与运行状态不一致。
+
+`TALENTMATCH_SKILL_EXTRACTOR=jobbert`会为英文JD补充固定版本JobBERT开放技能Span，并在候选人原文中只核验当前岗位所需技能。该路径不会对中文或西班牙文调用英文模型，模型懒加载且失败时保留原有规则/LLM结果。TalentCLEF完整development和难负样本实验未证明其跨岗位稳定改善，因此默认保持`catalog`，不得写成线上效果提升。
 
 如果 Ollama 不可用，选择前端的“快速规则模式”，整个核心匹配和审计流程仍可运行。Ollama 模式中，所有模型抽取结果仍会进行原文引用校验；引用无法在输入中找到时会被丢弃或回退到规则分析。
 
@@ -185,6 +195,8 @@ TALENTMATCH_OLLAMA_WORKERS=2
 - SkillSpan：官方test释放集3,569句、2,265个gold span；固定版本双JobBERT端点的typed exact F1为0.5920、boundary exact F1为0.6090、boundary overlap F1为0.8032，0次推理失败；该结果是同域监督模型专项基线，不是TalentMatch端到端效果；
 - JTH弱标签集：使用2022年岗位调参、2023年岗位选择配置、2024年后366个岗位与8,302个人岗对封存测试；同时比较技能关键词、原始字段多属性基线与结构化匹配，结构化匹配NDCG@5为0.5239；
 - TalentCLEF 2026 Task A：接入英/西双语完整职位与简历文本，development每种语言包含10个JD、472份CV和472条专家二元相关标注；BM25用于验证原始文本、全库排序、官方指标及TREC输出链路；固定3个JD/17份CV的Qwen抽取诊断中，Qwen3-4B在保持相同样本排序的同时耗时更低、回退更少，但该开发切片不作为封存效果；
+- TalentCLEF优化复核：完整英文development上的JobBERT技能融合只取得极小内部留出增量；10个JD、60个人岗难例对上，Qwen证据匹配NDCG为0.7761，而加入JobBERT后降至0.6557；两阶段融合也未通过3-JD留出验证，因此相关路径保留为实验开关而非默认能力；
+- 单Agent对照：在5个JD、30个人岗难例对上，单Qwen直接评分NDCG为0.7424，高于同范围证据工作流0.6479，但其双侧原文引用有效率为96.67%，低于证据工作流100%；该小型development消融只用于说明排序与可靠性的取舍，不证明Multi-Agent普遍更优；
 - 固定演示集与本地Ollama真实链路：验证前后端、证据引用、持久化和回退路径。
 - 固定8人Agent消融：单LLM直评、LLM证据抽取、确定性评分和冲突复核使用真实本地模型调用；
 - Reviewer异构模型消融：先观察到`qwen2.5:7b` Reviewer查全率更高但产生5条误报；加入确定性证据质量门后，同一24条受控边界样例上误报降为0，配对置信区间通过预设启用门槛，因此将Reviewer独立配置为Qwen2.5-7B；该结果仍不是独立人工集或生产效果；

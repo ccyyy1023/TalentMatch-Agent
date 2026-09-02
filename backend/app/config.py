@@ -19,6 +19,10 @@ class Settings:
         "TALENTMATCH_REVIEWER_MODEL", os.getenv("TALENTMATCH_CHAT_MODEL", "qwen2.5:7b"),
     )
     embed_model: str = os.getenv("TALENTMATCH_EMBED_MODEL", "embeddinggemma")
+    skill_extractor: str = os.getenv("TALENTMATCH_SKILL_EXTRACTOR", "catalog")
+    jobbert_cache_dir_raw: str = os.getenv(
+        "TALENTMATCH_JOBBERT_CACHE_DIR", "data/external/skillspan_models",
+    )
     ollama_workers_raw: str = os.getenv("TALENTMATCH_OLLAMA_WORKERS", "2")
     auth_session_hours_raw: str = os.getenv("TALENTMATCH_AUTH_SESSION_HOURS", "8")
     task_backend: str = os.getenv("TALENTMATCH_TASK_BACKEND", "memory")
@@ -32,6 +36,11 @@ class Settings:
     @property
     def database_path(self) -> Path:
         path = Path(self.database_path_raw)
+        return path if path.is_absolute() else self.project_root / path
+
+    @property
+    def jobbert_cache_dir(self) -> Path:
+        path = Path(self.jobbert_cache_dir_raw)
         return path if path.is_absolute() else self.project_root / path
 
     @property

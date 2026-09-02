@@ -102,7 +102,7 @@ def test_ollama_candidate_agents_run_with_bounded_parallelism_and_keep_order(sam
     max_active = 0
 
     class RecordingAnalyzer:
-        def analyze(self, candidate_id, name, text, mode):
+        def analyze(self, candidate_id, name, text, mode, target_skills=None):
             nonlocal active, max_active
             with lock:
                 active += 1
@@ -126,7 +126,7 @@ def test_adaptive_mode_routes_only_weak_candidate_to_llm(sample_request, monkeyp
     calls = []
 
     class AdaptiveAnalyzer:
-        def analyze(self, candidate_id, name, text, mode):
+        def analyze(self, candidate_id, name, text, mode, target_skills=None):
             calls.append((candidate_id, mode))
             if mode == "rules" and candidate_id.endswith("001"):
                 return ParsedCandidate(

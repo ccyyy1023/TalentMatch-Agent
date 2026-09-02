@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from app.services.analyzers import CandidateAnalyzer, JDAnalyzer
+from app.services.hybrid_skill_extractor import DocumentSkillExtractor
+from app.services.matcher import MatchingEngine
 from app.services.ollama_client import OllamaClient
 from app.services.talentclef_benchmark import BM25Index, TalentClefDataset, evaluate_rankings
 
@@ -24,12 +26,16 @@ def build_stratified_sample(
     positives_per_query: int = 4,
     negatives_per_query: int = 4,
     seed: int = 20260901,
+    negative_strategy: str = "random",
 ) -> ExtractionABSample:
     if dataset.qrels is None:
         raise ValueError("Extraction A/B requires public qrels")
     if min(query_limit, positives_per_query, negatives_per_query) < 1:
         raise ValueError("Sample sizes must be positive")
+    if negative_strategy not in {"random", "bm25_hard"}:
+        raise ValueError("negative_strategy must be random or bm25_hard")
     rng = random.Random(seed)
+    hard_negative_index = BM25Index(dataset.corpus) if negative_strategy == "bm25_hard" else None
     all_queries = sorted(dataset.queries)
     if query_limit > len(all_queries):
         raise ValueError("query_limit exceeds available queries")
@@ -47,7 +53,16 @@ def build_stratified_sample(
         if positives_per_query > len(positives) or negatives_per_query > len(negatives):
             raise ValueError(f"Not enough labeled candidates for query {query_id}")
         selected_positive = rng.sample(positives, positives_per_query)
-        selected_negative = rng.sample(negatives, negatives_per_query)
+        if hard_negative_index is not None:
+            negative_set = set(negatives)
+            ranked_negatives = [
+                document_id
+                for document_id, _ in hard_negative_index.rank(dataset.queries[query_id])
+                if document_id in negative_set
+            ]
+            selected_negative = ranked_negatives[:negatives_per_query]
+        else:
+            selected_negative = rng.sample(negatives, negatives_per_query)
         pool = selected_positive + selected_negative
         rng.shuffle(pool)
         pools[query_id] = tuple(pool)
@@ -81,9 +96,15 @@ def _rank_sample(
 
 
 def evaluate_raw_sample(dataset: TalentClefDataset, sample: ExtractionABSample) -> dict[str, float]:
-    rankings = _rank_sample(dataset.queries, dataset.corpus, sample)
+    rankings = raw_sample_rankings(dataset, sample)
     metrics, _ = evaluate_rankings(rankings, sample.labels)
     return metrics
+
+
+def raw_sample_rankings(
+    dataset: TalentClefDataset, sample: ExtractionABSample,
+) -> dict[str, list[tuple[str, float]]]:
+    return _rank_sample(dataset.queries, dataset.corpus, sample)
 
 
 def run_model_extraction(
@@ -91,10 +112,14 @@ def run_model_extraction(
     sample: ExtractionABSample,
     model: str,
     base_url: str | None = None,
+    *,
+    skill_extractor: DocumentSkillExtractor | None = None,
+    cache_enabled: bool = False,
+    variant: str | None = None,
 ) -> dict:
-    client = OllamaClient(base_url=base_url, chat_model=model, cache_enabled=False)
-    jd_analyzer = JDAnalyzer(client)
-    candidate_analyzer = CandidateAnalyzer(client)
+    client = OllamaClient(base_url=base_url, chat_model=model, cache_enabled=cache_enabled)
+    jd_analyzer = JDAnalyzer(client, skill_extractor)
+    candidate_analyzer = CandidateAnalyzer(client, skill_extractor)
     started = perf_counter()
 
     parsed_jobs = {}
@@ -113,12 +138,19 @@ def run_model_extraction(
 
     parsed_candidates = {}
     candidate_details = {}
+    target_skills = sorted({
+        item.normalized_skill
+        for parsed_job in parsed_jobs.values()
+        for item in parsed_job.requirements
+        if item.normalized_skill
+    })
     for candidate_id in sample.candidate_ids:
         parsed, origin = candidate_analyzer.analyze(
             candidate_id,
             f"Candidate {candidate_id}",
             dataset.corpus[candidate_id],
             "ollama",
+            target_skills=target_skills,
         )
         parsed_candidates[candidate_id] = parsed
         candidate_details[candidate_id] = {
@@ -148,6 +180,21 @@ def run_model_extraction(
     }
     rankings = _rank_sample(extracted_queries, extracted_candidates, sample)
     metrics, per_query = evaluate_rankings(rankings, sample.labels)
+    engine = MatchingEngine()
+    matcher_rankings = {
+        query_id: sorted(
+            (
+                (
+                    candidate_id,
+                    engine.match(parsed_jobs[query_id], parsed_candidates[candidate_id]).score,
+                )
+                for candidate_id in sample.pools[query_id]
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        for query_id in sample.query_ids
+    }
+    matcher_metrics, matcher_per_query = evaluate_rankings(matcher_rankings, sample.labels)
 
     job_fallbacks = sum(row["status"] == "fallback" for row in job_details.values())
     candidate_fallbacks = sum(str(row["origin"]).startswith("fallback:") for row in candidate_details.values())
@@ -155,7 +202,8 @@ def run_model_extraction(
     candidate_evidence = sum(row["evidence"] for row in candidate_details.values())
     return {
         "model": model,
-        "cache_enabled": False,
+        "variant": variant or model,
+        "cache_enabled": cache_enabled,
         "elapsed_seconds": round(perf_counter() - started, 3),
         "model_calls_expected": len(sample.query_ids) + len(sample.candidate_ids),
         "fallbacks": {
@@ -179,6 +227,19 @@ def run_model_extraction(
             "candidate_warnings": sum(row["warnings"] for row in candidate_details.values()),
         },
         "sample_ranking_metrics": metrics,
+        "sample_rankings": {
+            query_id: [[candidate_id, round(score, 8)] for candidate_id, score in rows]
+            for query_id, rows in rankings.items()
+        },
+        "deterministic_matching_metrics": matcher_metrics,
+        "deterministic_matching_rankings": {
+            query_id: [[candidate_id, round(score, 8)] for candidate_id, score in rows]
+            for query_id, rows in matcher_rankings.items()
+        },
+        "deterministic_matching_per_query": {
+            query_id: {name: round(value, 6) for name, value in row.items()}
+            for query_id, row in matcher_per_query.items()
+        },
         "per_query_ranking_metrics": {
             query_id: {name: round(value, 6) for name, value in row.items()}
             for query_id, row in per_query.items()

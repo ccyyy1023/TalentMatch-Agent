@@ -68,3 +68,24 @@ def test_rejects_unlabeled_or_oversized_samples():
         build_stratified_sample(dataset_without_qrels)
     with pytest.raises(ValueError, match="query_limit"):
         build_stratified_sample(dataset, query_limit=10)
+    with pytest.raises(ValueError, match="negative_strategy"):
+        build_stratified_sample(dataset, negative_strategy="unknown")
+
+
+def test_bm25_hard_negative_strategy_selects_lexically_confusing_documents():
+    dataset = TalentClefDataset(
+        split="development",
+        language="en",
+        queries={"q1": "python data engineer"},
+        corpus={
+            "positive": "python data engineer",
+            "hard": "python data engineer internship",
+            "easy": "clinical nurse",
+        },
+        qrels={"q1": {"positive": 1, "hard": 0, "easy": 0}},
+    )
+    sample = build_stratified_sample(
+        dataset, query_limit=1, positives_per_query=1, negatives_per_query=1,
+        negative_strategy="bm25_hard",
+    )
+    assert set(sample.pools["q1"]) == {"positive", "hard"}

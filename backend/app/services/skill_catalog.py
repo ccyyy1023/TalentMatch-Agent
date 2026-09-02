@@ -64,6 +64,8 @@ DISPLAY_NAMES = {
 
 
 def display_name(skill: str) -> str:
+    if skill.startswith("open_skill:"):
+        return skill.removeprefix("open_skill:").replace("_", " ")
     return DISPLAY_NAMES.get(skill, skill.replace("_", " ").title())
 
 
