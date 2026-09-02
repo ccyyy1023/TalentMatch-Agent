@@ -85,4 +85,10 @@ Qwen2.5 与 Qwen3 的抽取 A/B 必须在同一固定数据切片、同一提示
 
 因此当前结果不支持“Multi-Agent排序一定优于单Agent”。项目采用分阶段工作流的依据是可审计中间状态、证据强约束、候选人解析复用、独立失败回退和人工复核，而不是Agent数量或一次小样本NDCG。
 
+## 证据约束Top-K重排
+
+基于10个JD、每个2个相关CV与4个BM25难负例的development压力集，项目将直接Qwen评分限制在第一阶段结构化匹配的Top-K内。只有同时提供可在JD与CV原文中精确定位的引用，直接分数才允许参与融合；60次评分中55次通过引用门，5次无效引用退回第一阶段分数。
+
+为防止在同一岗位上选参和报分，评测对每个岗位执行一次leave-one-job-out：其余9个岗位选择Top-K和融合权重，再应用到当前留出岗位。第一阶段MAP/NDCG为0.6525/0.7761，交叉验证重排为0.6025/0.7309，分别下降0.0500/0.0453，未达到“NDCG至少提升0.01且MAP不下降”的启用门槛。因此生产默认不启用该重排器，也不把它写成效果提升。
+
 派生报告：`talentclef_hybrid_benchmark.json`、`talentclef_hard_negative_ab_q10.json`、`talentclef_agent_ablation_q5.json`，均位于被版本控制排除的`data/derived/`。

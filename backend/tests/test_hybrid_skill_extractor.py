@@ -71,6 +71,25 @@ def test_hybrid_mentions_reach_existing_jd_and_candidate_schemas():
     )
 
 
+def test_candidate_profile_stays_job_independent_until_exact_target_verification():
+    analyzer = CandidateAnalyzer(OllamaClient(chat_model="unused"))
+    text = "WORK EXPERIENCE\nDelivered project management for a migration."
+    profile, origin = analyzer.analyze_profile("c1", "Candidate", text, "rules")
+    enriched = analyzer.enrich_for_job(profile, text, ["open_skill:project_management"])
+    enriched_again = analyzer.enrich_for_job(enriched, text, ["open_skill:project_management"])
+
+    assert origin == "rules"
+    assert "open_skill:project_management" not in profile.skills
+    assert "open_skill:project_management" in enriched.skills
+    assert len(enriched_again.evidence) == len(enriched.evidence)
+    assert any(
+        item.normalized_skill == "open_skill:project_management"
+        and item.source_quote == "Delivered project management for a migration."
+        and item.section == "work"
+        for item in enriched.evidence
+    )
+
+
 def test_open_skill_normalization_rejects_generic_labels():
     assert normalize_open_skill("skills") is None
     assert normalize_open_skill("Stakeholder Management") == "open_skill:stakeholder_management"

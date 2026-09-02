@@ -113,14 +113,16 @@ class TalentMatchWorkflow:
     def _build_graph(self):
         graph = StateGraph(WorkflowState)
         graph.add_node("jd_analyzer_agent", self._jd_node)
-        graph.add_node("candidate_evidence_agents", self._candidate_node)
+        graph.add_node("candidate_profile_agents", self._candidate_node)
+        graph.add_node("job_conditioned_evidence_verifier", self._targeted_verification_node)
         graph.add_node("deterministic_matching_engine", self._match_node)
         graph.add_node("conflict_reviewer_agent", self._review_node)
         graph.add_node("compliance_agent", self._compliance_node)
         graph.add_node("ranking_and_explanation", self._finalize_node)
         graph.add_edge(START, "jd_analyzer_agent")
-        graph.add_edge("jd_analyzer_agent", "candidate_evidence_agents")
-        graph.add_edge("candidate_evidence_agents", "deterministic_matching_engine")
+        graph.add_edge("jd_analyzer_agent", "candidate_profile_agents")
+        graph.add_edge("candidate_profile_agents", "job_conditioned_evidence_verifier")
+        graph.add_edge("job_conditioned_evidence_verifier", "deterministic_matching_engine")
         graph.add_conditional_edges(
             "deterministic_matching_engine", self._needs_review,
             {"review": "conflict_reviewer_agent", "skip": "compliance_agent"},
@@ -139,6 +141,7 @@ class TalentMatchWorkflow:
         clients = self._unique_clients()
         cache_hits_before = sum(client.cache_hits for client in clients)
         cache_misses_before = sum(client.cache_misses for client in clients)
+        profile_cache_before = self.candidate_analyzer.profile_cache_status()
         initial_state: WorkflowState = {"request": request, "traces": []}
         if progress_callback is not None:
             initial_state["progress_callback"] = progress_callback
@@ -147,6 +150,9 @@ class TalentMatchWorkflow:
         cache_status = self.cache_status()
         cache_status["run_hits"] = sum(client.cache_hits for client in clients) - cache_hits_before
         cache_status["run_misses"] = sum(client.cache_misses for client in clients) - cache_misses_before
+        profile_cache_after = self.candidate_analyzer.profile_cache_status()
+        profile_cache_after["run_hits"] = int(profile_cache_after["session_hits"]) - int(profile_cache_before["session_hits"])
+        profile_cache_after["run_misses"] = int(profile_cache_after["session_misses"]) - int(profile_cache_before["session_misses"])
         return AnalysisResponse(
             run_id=f"run-{uuid4().hex[:12]}", mode=request.mode, job=final["job"], ranking=final["results"],
             compliance=final["compliance"], traces=final["traces"],
@@ -157,6 +163,9 @@ class TalentMatchWorkflow:
                 "agent_models": self.agent_models,
                 "embed_model": self.candidate_ollama.embed_model,
                 "skill_extractor": "jobbert" if self.skill_extractor is not None else "catalog_and_llm",
+                "candidate_profile_scope": "job_independent",
+                "job_conditioned_verifier": "deterministic_exact_quote",
+                "candidate_profile_cache": profile_cache_after,
                 "criteria_confirmed_by_human": request.criteria_confirmed_by_human,
                 "cache": cache_status,
                 **model_status,
@@ -181,23 +190,20 @@ class TalentMatchWorkflow:
         started = perf_counter()
         request_mode = state["request"].mode
         workers = settings.ollama_workers if request_mode in {"ollama", "adaptive"} else 1
-        target_skills = [
-            item.normalized_skill
-            for item in state.get("job", ParsedJD()).requirements
-            if item.normalized_skill
-        ]
 
         def analyze_item(item):
-            return self.candidate_analyzer.analyze(
-                item.id, item.name, item.text, request_mode, target_skills=target_skills,
-            )
+            method = getattr(self.candidate_analyzer, "analyze_profile", None)
+            if callable(method):
+                return method(item.id, item.name, item.text, request_mode)
+            return self.candidate_analyzer.analyze(item.id, item.name, item.text, request_mode, target_skills=None)
 
         routed_to_llm = len(state["request"].candidates) if request_mode == "ollama" else 0
         if request_mode == "adaptive":
+            profile_method = getattr(self.candidate_analyzer, "analyze_profile", None)
             base = [
-                self.candidate_analyzer.analyze(
-                    item.id, item.name, item.text, "rules", target_skills=target_skills,
-                )
+                profile_method(item.id, item.name, item.text, "rules")
+                if callable(profile_method)
+                else self.candidate_analyzer.analyze(item.id, item.name, item.text, "rules", target_skills=None)
                 for item in state["request"].candidates
             ]
             selected = [index for index, (candidate, _) in enumerate(base) if self._needs_llm_enrichment(candidate)]
@@ -205,8 +211,10 @@ class TalentMatchWorkflow:
 
             def enrich(index):
                 item = state["request"].candidates[index]
+                if callable(profile_method):
+                    return index, profile_method(item.id, item.name, item.text, "ollama")
                 return index, self.candidate_analyzer.analyze(
-                    item.id, item.name, item.text, "ollama", target_skills=target_skills,
+                    item.id, item.name, item.text, "ollama", target_skills=None,
                 )
 
             enriched = {}
@@ -226,11 +234,35 @@ class TalentMatchWorkflow:
         detail = "，".join(f"{key}:{value}" for key, value in modes.items())
         used_fallback = any(key.startswith("fallback") or key == "security_fallback" for key in modes)
         trace = TraceEvent(
-            node="candidate_evidence_agents", status="fallback" if used_fallback else "completed",
-            detail=f"解析{len(candidates)}份候选人材料（{detail}，LLM路由:{routed_to_llm}/{len(candidates)}，并行度:{workers}）",
+            node="candidate_profile_agents", status="fallback" if used_fallback else "completed",
+            detail=f"生成{len(candidates)}份岗位无关候选人画像（{detail}，LLM路由:{routed_to_llm}/{len(candidates)}，并行度:{workers}）",
             elapsed_ms=(perf_counter() - started) * 1000,
         )
-        self._notify(state, "candidates_ready", 45, trace.detail)
+        self._notify(state, "candidate_profiles_ready", 40, trace.detail)
+        return {"candidates": candidates, "traces": [*state["traces"], trace]}
+
+    def _targeted_verification_node(self, state: WorkflowState) -> dict:
+        started = perf_counter()
+        target_skills = [
+            item.normalized_skill for item in state["job"].requirements if item.normalized_skill
+        ]
+        input_by_id = {item.id: item for item in state["request"].candidates}
+        verify = getattr(self.candidate_analyzer, "enrich_for_job", None)
+        added = 0
+        candidates: list[ParsedCandidate] = []
+        for profile in state["candidates"]:
+            if callable(verify):
+                enriched = verify(profile, input_by_id[profile.id].text, target_skills)
+            else:
+                enriched = profile
+            added += max(0, len(enriched.evidence) - len(profile.evidence))
+            candidates.append(enriched)
+        trace = TraceEvent(
+            node="job_conditioned_evidence_verifier", status="completed",
+            detail=f"针对当前岗位核验{len(target_skills)}项技能，补充{added}条原文可定位证据；未重复调用画像模型",
+            elapsed_ms=(perf_counter() - started) * 1000,
+        )
+        self._notify(state, "candidates_ready", 50, trace.detail)
         return {"candidates": candidates, "traces": [*state["traces"], trace]}
 
     def _match_node(self, state: WorkflowState) -> dict:

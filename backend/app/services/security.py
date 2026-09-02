@@ -12,6 +12,13 @@ INJECTION_PATTERNS = (
     r"system\s*prompt\s*[:：]",
 )
 
+SENSITIVE_LINE_PATTERNS = (
+    r"(?:性别|年龄|出生(?:日期|年月)?|婚姻(?:状况)?|民族|国籍|籍贯|政治面貌)\s*[:：]",
+    r"(?:gender|sex|age|date\s+of\s+birth|marital\s+status|nationality|ethnicity|race)\s*[:：]",
+    r"(?:^|\s)[男女](?:\s|$)",
+    r"\b\d{1,2}\s*岁\b",
+)
+
 
 def detect_prompt_injection(text: str) -> list[str]:
     flags = []
@@ -19,3 +26,20 @@ def detect_prompt_injection(text: str) -> list[str]:
         if re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL):
             flags.append(f"prompt_injection_pattern_{index}")
     return flags
+
+
+def sanitize_candidate_text(text: str, display_name: str = "") -> str:
+    """Remove identity/contact-only lines before model extraction while preserving evidence lines verbatim."""
+    retained = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if display_name and line == display_name.strip():
+            continue
+        if re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", line):
+            continue
+        if any(re.search(pattern, line, flags=re.IGNORECASE) for pattern in SENSITIVE_LINE_PATTERNS):
+            continue
+        retained.append(line)
+    return "\n".join(retained)

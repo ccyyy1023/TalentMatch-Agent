@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.model_cache import ModelResponseCache
 from app.services.ollama_client import OllamaClient
+from app.services.analyzers import CandidateAnalyzer
 
 
 def test_cache_key_changes_with_model_prompt_or_input(tmp_path: Path):
@@ -65,3 +66,37 @@ def test_cache_hit_state_is_isolated_per_worker_thread(tmp_path: Path):
         before, after = executor.submit(worker).result()
     assert before is False and after is True
     assert client.last_call_cache_hit is True
+
+
+def test_candidate_profile_llm_cache_is_reused_across_job_targets(tmp_path: Path, monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"skills":["Python"],"years_experience":2,"education":"本科","evidence":[{"kind":"skill","value":"Python","normalized_skill":"python","source_quote":"项目使用Python完成接口开发。","section":"project","strength":1.0}],"parse_warnings":[]}'}}
+
+    calls = {"post": 0}
+
+    def fake_post(*args, **kwargs):
+        calls["post"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.ollama_client.httpx.post", fake_post)
+    client = OllamaClient(cache=ModelResponseCache(tmp_path / "cache.db"))
+    client._chat_model_identity = "qwen@test-digest"
+    analyzer = CandidateAnalyzer(client)
+    text = "项目经历\n项目使用Python完成接口开发。\n熟悉project management。"
+
+    first, first_origin = analyzer.analyze(
+        "c1", "Candidate", text, "ollama", target_skills=["python"],
+    )
+    second, second_origin = analyzer.analyze(
+        "c1", "Candidate", text, "ollama", target_skills=["open_skill:project_management"],
+    )
+
+    assert calls["post"] == 1
+    assert first_origin == "ollama"
+    assert second_origin == "ollama_cache"
+    assert "python" in first.skills
+    assert "open_skill:project_management" in second.skills

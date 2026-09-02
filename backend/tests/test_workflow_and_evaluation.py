@@ -54,12 +54,22 @@ def test_workflow_reports_monotonic_node_progress(sample_request):
     stages = [stage for stage, _, _ in updates]
     progress = [value for _, value, _ in updates]
     assert stages[0] == "job_ready"
+    assert "candidate_profiles_ready" in stages
     assert "candidates_ready" in stages
     assert "matching_ready" in stages
     assert "compliance_ready" in stages
     assert stages[-1] == "ranking_ready"
     assert progress == sorted(progress)
     assert progress[0] == 15 and progress[-1] == 95
+
+
+def test_workflow_separates_reusable_profile_from_job_conditioned_verification(sample_request):
+    response = TalentMatchWorkflow().run(sample_request)
+    nodes = [item.node for item in response.traces]
+    assert nodes.index("candidate_profile_agents") < nodes.index("job_conditioned_evidence_verifier")
+    assert nodes.index("job_conditioned_evidence_verifier") < nodes.index("deterministic_matching_engine")
+    assert response.model_info["candidate_profile_scope"] == "job_independent"
+    assert response.model_info["job_conditioned_verifier"] == "deterministic_exact_quote"
 
 
 def test_ranking_is_descending(sample_request):

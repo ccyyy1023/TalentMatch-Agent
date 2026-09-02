@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
+import json
+import threading
 from time import perf_counter
 from typing import TYPE_CHECKING
 
 from app.schemas import Evidence, ParsedCandidate, ParsedJD, Priority, Requirement, TraceEvent
 from app.services.ollama_client import OllamaClient, OllamaUnavailable
 from app.services.skill_catalog import display_name, extract_skills, normalize_skill
-from app.services.security import detect_prompt_injection
+from app.services.security import detect_prompt_injection, sanitize_candidate_text
 
 if TYPE_CHECKING:
     from app.services.hybrid_skill_extractor import DocumentSkillExtractor
@@ -214,34 +216,147 @@ class JDAnalyzer:
 
 
 class CandidateAnalyzer:
+    PROFILE_CACHE_VERSION = "candidate-profile-v1"
     SECTION_MARKERS = {
         "技能": "skills", "专业技能": "skills", "技术栈": "skills",
+        "skills": "skills", "technical skills": "skills", "core competencies": "skills",
         "项目": "project", "项目经历": "project",
+        "projects": "project", "project experience": "project",
         "工作": "work", "工作经历": "work", "实习经历": "work",
+        "work experience": "work", "professional experience": "work", "employment history": "work",
         "教育": "education", "教育经历": "education",
+        "education": "education", "academic background": "education",
         "个人总结": "summary", "自我评价": "summary",
+        "summary": "summary", "professional summary": "summary", "profile": "summary",
     }
 
     def __init__(self, ollama: OllamaClient, skill_extractor: "DocumentSkillExtractor | None" = None):
         self.ollama = ollama
         self.skill_extractor = skill_extractor
+        self.profile_cache_hits = 0
+        self.profile_cache_misses = 0
+        self._profile_stats_lock = threading.Lock()
 
     def analyze(
         self, candidate_id: str, name: str, text: str, mode: str,
         target_skills: list[str] | None = None,
     ) -> tuple[ParsedCandidate, str]:
+        profile, origin = self.analyze_profile(candidate_id, name, text, mode)
+        return self.enrich_for_job(profile, text, target_skills), origin
+
+    def analyze_profile(
+        self, candidate_id: str, name: str, text: str, mode: str,
+    ) -> tuple[ParsedCandidate, str]:
+        """Build a job-independent candidate profile that can be reused across jobs."""
         security_flags = detect_prompt_injection(text)
+        analysis_text = sanitize_candidate_text(text, name)
         if mode == "ollama" and security_flags:
-            parsed = self._analyze_rules(candidate_id, name, text, target_skills)
-            parsed.security_flags = security_flags
+            parsed = self._analyze_rules(candidate_id, name, analysis_text)
+            parsed = self._attach_input_metadata(parsed, name, text, security_flags)
             return parsed, "security_fallback"
         if mode == "ollama":
+            profile_cache_enabled = self._profile_cache_available()
+            profile_key = self._profile_cache_key(candidate_id, analysis_text) if profile_cache_enabled else None
+            if profile_cache_enabled and profile_key is not None:
+                cached = self.ollama.cache.get(profile_key)
+                if cached is not None:
+                    with self._profile_stats_lock:
+                        self.profile_cache_hits += 1
+                    parsed = self._attach_input_metadata(
+                        ParsedCandidate.model_validate(cached), name, text, security_flags,
+                    )
+                    return parsed, "ollama_cache"
+                with self._profile_stats_lock:
+                    self.profile_cache_misses += 1
             try:
-                parsed = self._analyze_with_llm(candidate_id, name, text, target_skills)
+                parsed = self._analyze_with_llm(candidate_id, name, analysis_text)
+                parsed = self._attach_input_metadata(parsed, name, text, security_flags)
+                if profile_cache_enabled and profile_key is not None:
+                    cache_profile = parsed.model_copy(update={
+                        "display_name": "候选人", "pii_detected": [], "security_flags": [],
+                    })
+                    self.ollama.cache.put(
+                        profile_key, self.ollama._model_identity(), "candidate_profile", cache_profile.model_dump(),
+                    )
                 return parsed, "ollama_cache" if getattr(self.ollama, "last_call_cache_hit", False) else "ollama"
             except Exception as exc:
-                return self._analyze_rules(candidate_id, name, text, target_skills), f"fallback:{type(exc).__name__}:{str(exc)[:80]}"
-        return self._analyze_rules(candidate_id, name, text, target_skills), "rules"
+                parsed = self._analyze_rules(candidate_id, name, analysis_text)
+                return self._attach_input_metadata(parsed, name, text, security_flags), f"fallback:{type(exc).__name__}:{str(exc)[:80]}"
+        parsed = self._analyze_rules(candidate_id, name, analysis_text)
+        return self._attach_input_metadata(parsed, name, text, security_flags), "rules"
+
+    def profile_cache_status(self) -> dict[str, int | str]:
+        with self._profile_stats_lock:
+            return {
+                "version": self.PROFILE_CACHE_VERSION,
+                "session_hits": self.profile_cache_hits,
+                "session_misses": self.profile_cache_misses,
+            }
+
+    def _profile_cache_key(self, candidate_id: str, analysis_text: str) -> str:
+        user = json.dumps(
+            {"candidate_id": candidate_id, "text": analysis_text},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        return self.ollama.cache.build_key(
+            self.ollama._model_identity(), "candidate_profile", self.PROFILE_CACHE_VERSION,
+            "job-independent ParsedCandidate", user, {},
+        )
+
+    def _attach_input_metadata(
+        self, profile: ParsedCandidate, name: str, original_text: str, security_flags: list[str],
+    ) -> ParsedCandidate:
+        return profile.model_copy(update={
+            "display_name": name,
+            "masked_name": self._masked_name(profile.id),
+            "pii_detected": self._detect_pii(original_text),
+            "security_flags": security_flags,
+        })
+
+    def _profile_cache_available(self) -> bool:
+        return bool(
+            getattr(self.ollama, "cache_enabled", False)
+            and getattr(self.ollama, "cache", None) is not None
+            and callable(getattr(self.ollama, "_model_identity", None))
+        )
+
+    def enrich_for_job(
+        self, profile: ParsedCandidate, text: str, target_skills: list[str] | None,
+    ) -> ParsedCandidate:
+        """Add exact, job-conditioned skill mentions without rerunning the profile Agent."""
+        if not target_skills:
+            return profile
+        from app.services.hybrid_skill_extractor import verify_target_skills
+
+        analysis_text = sanitize_candidate_text(text, profile.display_name)
+        line_sections = self._line_sections(analysis_text)
+        evidence = list(profile.evidence)
+        existing = {(item.normalized_skill, item.source_quote) for item in evidence if item.normalized_skill}
+        for mention in verify_target_skills(analysis_text, target_skills):
+            key = (mention.normalized_skill, mention.source_quote)
+            if key in existing:
+                continue
+            existing.add(key)
+            mention_section = line_sections.get(mention.source_quote, "unknown")
+            strength = {
+                "work": 1.0, "project": 1.0, "skills": 0.65,
+                "education": 0.8, "summary": 0.45,
+            }.get(mention_section, 0.55)
+            evidence.append(Evidence(
+                id=f"{profile.id}-ev-{len(evidence) + 1}", kind="skill", value=mention.text,
+                normalized_skill=mention.normalized_skill, source_quote=mention.source_quote,
+                section=mention_section, strength=strength,
+            ))
+        skills = sorted({item.normalized_skill for item in evidence if item.normalized_skill})
+        warnings = list(profile.parse_warnings)
+        if skills:
+            warnings = [item for item in warnings if item != "未从简历中提取到已知技能"]
+        if any(
+            item.kind == "skill" and item.section in {"work", "project"} and item.strength >= 0.8
+            for item in evidence
+        ):
+            warnings = [item for item in warnings if item != "技能缺少项目或工作经历证据"]
+        return profile.model_copy(update={"skills": skills, "evidence": evidence, "parse_warnings": warnings})
 
     def _analyze_with_llm(
         self, candidate_id: str, name: str, text: str, target_skills: list[str] | None = None,
@@ -274,7 +389,7 @@ class CandidateAnalyzer:
             ))
         if not evidence:
             raise OllamaUnavailable("模型没有返回可核验证据")
-        rules_parsed = self._analyze_rules(candidate_id, name, text, target_skills)
+        rules_parsed = self._analyze_rules(candidate_id, name, text)
         merged: list[Evidence] = []
         seen_evidence: set[tuple] = set()
         for item in [*evidence, *rules_parsed.evidence]:
@@ -311,12 +426,13 @@ class CandidateAnalyzer:
                 warning_values.append(str(warning))
         if rules_parsed.years_experience is not None:
             warning_values = [warning for warning in warning_values if not ("年限" in warning or "经验" in warning)]
-        return ParsedCandidate(
+        profile = ParsedCandidate(
             id=candidate_id, display_name=name, masked_name=self._masked_name(candidate_id), skills=skills,
             years_experience=combined_years, education=education or rules_parsed.education, evidence=evidence,
             pii_detected=self._detect_pii(text), security_flags=detect_prompt_injection(text),
             parse_warnings=list(dict.fromkeys(warning_values + rules_parsed.parse_warnings))[:10],
         )
+        return self.enrich_for_job(profile, text, target_skills)
 
     def _analyze_rules(
         self, candidate_id: str, name: str, text: str, target_skills: list[str] | None = None,
@@ -328,9 +444,10 @@ class CandidateAnalyzer:
             line = raw_line.strip()
             if not line:
                 continue
-            normalized_header = re.sub(r"[：:\s【】\[\]]", "", line)
+            normalized_header = re.sub(r"[：:\s【】\[\]]", "", line).casefold()
             for marker, mapped in self.SECTION_MARKERS.items():
-                if normalized_header == marker or normalized_header.startswith(marker):
+                normalized_marker = re.sub(r"\s", "", marker).casefold()
+                if normalized_header == normalized_marker or normalized_header.startswith(normalized_marker):
                     section = mapped
                     break
             line_sections[line] = section
@@ -364,30 +481,6 @@ class CandidateAnalyzer:
                     id=f"{candidate_id}-ev-{len(evidence) + 1}", kind="achievement", value=line[:100],
                     source_quote=line[:300], section=section, strength=section_strength,
                 ))
-        if target_skills:
-            from app.services.hybrid_skill_extractor import verify_target_skills
-
-            mentions = verify_target_skills(text, target_skills)
-            existing = {(item.normalized_skill, item.source_quote) for item in evidence if item.normalized_skill}
-            for mention in mentions:
-                key = (mention.normalized_skill, mention.source_quote)
-                if key in existing:
-                    continue
-                existing.add(key)
-                mention_section = line_sections.get(mention.source_quote, "unknown")
-                strength = {
-                    "work": 1.0, "project": 1.0, "skills": 0.65,
-                    "education": 0.8, "summary": 0.45,
-                }.get(mention_section, 0.55)
-                evidence.append(Evidence(
-                    id=f"{candidate_id}-ev-{len(evidence) + 1}",
-                    kind="skill",
-                    value=mention.text,
-                    normalized_skill=mention.normalized_skill,
-                    source_quote=mention.source_quote,
-                    section=mention_section,
-                    strength=strength,
-                ))
         years_values = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)\s*年(?:[^，。；;\n]{0,10})?(?:以上|及以上|经验)", text)]
         years = max(years_values) if years_values else self._estimate_years_from_dates(text)
         education_match = re.search(r"(博士|硕士|本科|大专)", text)
@@ -397,12 +490,29 @@ class CandidateAnalyzer:
             warnings.append("未从简历中提取到已知技能")
         if not any(ev.section in {"work", "project"} for ev in evidence if ev.kind == "skill"):
             warnings.append("技能缺少项目或工作经历证据")
-        return ParsedCandidate(
+        profile = ParsedCandidate(
             id=candidate_id, display_name=name, masked_name=self._masked_name(candidate_id), skills=skills,
             years_experience=years, education=education_match.group(1) if education_match else None,
             evidence=evidence, pii_detected=self._detect_pii(text),
             security_flags=detect_prompt_injection(text), parse_warnings=warnings,
         )
+        return self.enrich_for_job(profile, text, target_skills)
+
+    def _line_sections(self, text: str) -> dict[str, str]:
+        section = "unknown"
+        line_sections: dict[str, str] = {}
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            normalized_header = re.sub(r"[：:\s【】\[\]]", "", line).casefold()
+            for marker, mapped in self.SECTION_MARKERS.items():
+                normalized_marker = re.sub(r"\s", "", marker).casefold()
+                if normalized_header == normalized_marker or normalized_header.startswith(normalized_marker):
+                    section = mapped
+                    break
+            line_sections[line] = section
+        return line_sections
 
     @staticmethod
     def _estimate_years_from_dates(text: str) -> float | None:

@@ -12,12 +12,14 @@
 - 将岗位要求区分为硬性条件、加分项和上下文职责，并保留原文引用。
 - 排序前由招聘人员检查、修改优先级、删除误抽取项并确认岗位条件。
 - 从工作、项目、技能列表和自我评价中抽取不同强度的能力证据。
+- 将候选人画像解析与岗位条件核验拆分：岗位无关画像可跨岗位持久化复用，岗位侧只执行不调用LLM的原文精确核验。
 - 使用硬性条件85%、加分项10%、上下文5%的分组权重完成评分；组内先求平均，避免冗长JD中的上下文条目靠数量稀释硬性要求；姓名、性别、年龄等敏感属性不参与计算。
 - 对硬性条件缺失、技能只有弱证据、时间线不完整等情况进入复核分支。
 - 使用 LangGraph 保存清晰的节点、条件路由和执行轨迹。
 - 支持 `rules` 快速模式、按证据质量选择性调用模型的 `adaptive` 模式，以及完整 Ollama `qwen3:4b` + `embeddinggemma` 模式。
 - 使用“文本SHA-256语义等价键 + 模型摘要 + 提示词版本 + 参数”持久化缓存模型JSON结果。
 - 检测简历中的提示注入指令；命中时跳过LLM解析，强制走确定性证据路径并给出安全告警。
+- 在画像抽取前删除姓名、联系方式和显式性别、年龄、国籍、婚姻等身份行，同时保留业务证据原文，支持反事实一致性审计。
 - 支持SQLite本地开发和PostgreSQL部署；通过Alembic管理运行记录、评测、账号、岗位、候选人和审计表结构。
 - 采用管理员预创建账号、管理员/招聘人员两级角色、8小时持久会话和操作审计保护候选人材料；不开放公共注册。
 - 长耗时分析可使用Redis + RQ持久化队列，API重启后任务状态仍可恢复，由独立Worker执行并写入运行记录。
@@ -123,9 +125,13 @@ Pop-Location
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef_hybrid.py
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef_hard_ab.py --query-limit 10
 .\.venv\Scripts\python.exe scripts\evaluate_talentclef_agent_ablation.py
+.\.venv\Scripts\python.exe scripts\evaluate_talentclef_topk_reranker.py
 .\.venv\Scripts\python.exe scripts\evaluate_reviewer_heterogeneity.py
 .\.venv\Scripts\python.exe scripts\evaluate_agent_ablation.py
 .\.venv\Scripts\python.exe scripts\security_audit.py
+.\.venv\Scripts\python.exe scripts\counterfactual_fairness_audit.py --mode rules
+.\.venv\Scripts\python.exe scripts\counterfactual_fairness_audit.py --mode ollama
+.\.venv\Scripts\python.exe scripts\benchmark_candidate_profile_reuse.py --workers 2
 .\.venv\Scripts\python.exe scripts\benchmark_parallel_ollama.py --mode adaptive
 .\.venv\Scripts\python.exe scripts\benchmark_agent_models.py --mode adaptive --jd-model qwen3:4b --candidate-model qwen3:4b --reviewer-model qwen2.5:7b
 .\.venv\Scripts\python.exe scripts\compare_performance.py
@@ -185,7 +191,7 @@ TALENTMATCH_OLLAMA_WORKERS=2
 
 如果 Ollama 不可用，选择前端的“快速规则模式”，整个核心匹配和审计流程仍可运行。Ollama 模式中，所有模型抽取结果仍会进行原文引用校验；引用无法在输入中找到时会被丢弃或回退到规则分析。
 
-模型JSON缓存保存在本地 `data/talentmatch.db`，不会上传外部服务。候选人抽取和模糊案例复核默认使用2路受控并行；存在明确严重冲突时只保留确定性结论，不重复调用LLM。历史Qwen2.5-7B固定8人测试中，完整Ollama模式无缓存耗时182.286秒；自适应模式先执行规则质量检查，只将3/8份弱证据材料送入LLM抽取，耗时降至76.744秒，相同输入缓存复跑最低观测为0.241秒。TalentCLEF固定3个JD/17份CV的冷缓存抽取诊断中，Qwen3-4B为321.455秒且零回退，Qwen2.5-7B为555.795秒且2次回退，两者样本排序均为MAP 1.0；该开发集诊断不等于封存测试或生产效果。Qwen3-8B在当前8GB显存设备的全文预检中持续触发120秒超时，因此不作为默认抽取模型。SQLite中仍可能保存结构化简历证据，因此企业化部署前需要增加加密、租户隔离和数据保留策略。
+模型JSON与岗位无关候选人画像缓存保存在本地 `data/talentmatch.db`，不会上传外部服务。画像键绑定脱敏后文本、候选人ID、模型摘要和解析版本；姓名或显式敏感属性变化不会触发新的画像推理。固定3岗位×8候选人工程基准中，逐岗位候选人解析参考需要24次模型调用，画像拆分后冷缓存只调用8次，减少66.67%；冷缓存耗时179.507秒，8份画像热缓存复跑0.055秒且结果完全一致。该对照证明当前固定负载下的计算复用，不是准确率或生产吞吐声明。历史自适应模式、TalentCLEF模型选型与Qwen3-8B硬件边界仍按对应评测文档解释。SQLite中仍可能保存结构化简历证据，因此企业化部署前需要增加加密、租户隔离和数据保留策略。
 
 ## 评测说明
 
@@ -201,6 +207,8 @@ TALENTMATCH_OLLAMA_WORKERS=2
 - 固定8人Agent消融：单LLM直评、LLM证据抽取、确定性评分和冲突复核使用真实本地模型调用；
 - Reviewer异构模型消融：先观察到`qwen2.5:7b` Reviewer查全率更高但产生5条误报；加入确定性证据质量门后，同一24条受控边界样例上误报降为0，配对置信区间通过预设启用门槛，因此将Reviewer独立配置为Qwen2.5-7B；该结果仍不是独立人工集或生产效果；
 - 6类提示注入审计：验证攻击文本在进入LLM前被拦截，且确定性评分不受攻击指令影响。
+- 敏感属性反事实审计：规则与真实Qwen链路分别对8份演示简历构造3类身份替换，共24组比较；两种模式的分数与排序一致率均为100%。该受控结果不等于证明系统无招聘偏差。
+- Top-K直接评分重排：10个TalentCLEF development岗位采用留一岗位选参，NDCG由0.7761降至0.7309，未通过启用门槛，因此只保留实验实现和失败分析，不接入默认链路。
 
 详细规范见 [docs/evaluation_protocol.md](docs/evaluation_protocol.md)，SkillSpan口径见 [docs/skillspan_benchmark.md](docs/skillspan_benchmark.md)，JTH口径见 [docs/jth_benchmark.md](docs/jth_benchmark.md)，TalentCLEF口径见 [docs/talentclef_benchmark.md](docs/talentclef_benchmark.md)，Reviewer消融见 [docs/reviewer_heterogeneity.md](docs/reviewer_heterogeneity.md)。
 
