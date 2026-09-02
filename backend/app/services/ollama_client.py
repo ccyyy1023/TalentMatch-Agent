@@ -78,11 +78,15 @@ class OllamaClient:
         self, system: str, user: str, timeout: float = 120,
         cache_namespace: str = "generic", prompt_version: str | None = None,
     ) -> dict[str, Any]:
-        options = {"temperature": 0.0, "seed": 42}
+        # Structured extraction must be bounded. Without num_predict, a local
+        # model can spend the full request timeout expanding repetitive JSON on
+        # long resumes, making both production latency and A/B results unstable.
+        options = {"temperature": 0.0, "seed": 42, "num_predict": 1536}
+        cache_options = {**options, "format": "json", "think": False}
         model_identity = self._model_identity()
         cache_key = self.cache.build_key(
             model_identity, cache_namespace, prompt_version or self.CACHE_PROMPT_VERSION,
-            system, user, options,
+            system, user, cache_options,
         )
         if self.cache_enabled:
             cached = self.cache.get(cache_key)
@@ -98,6 +102,7 @@ class OllamaClient:
             "model": self.chat_model,
             "stream": False,
             "format": "json",
+            "think": False,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

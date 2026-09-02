@@ -1,4 +1,4 @@
-from app.services.analyzers import CandidateAnalyzer, JDAnalyzer
+from app.services.analyzers import CandidateAnalyzer, JDAnalyzer, coerce_optional_number
 from app.services.ollama_client import OllamaClient
 
 
@@ -17,6 +17,35 @@ class FakeOllama:
             "parse_warnings": [],
         }
 
+
+class FakeJDOllama:
+    last_call_cache_hit = False
+
+    def generate_json(self, system, user, **kwargs):
+        return {
+            "title": "Backend Engineer",
+            "summary": "API role",
+            "requirements": [
+                {
+                    "text": "Python",
+                    "category": "skill",
+                    "priority": "hard",
+                    "normalized_skill": "python",
+                    "minimum_years": None,
+                    "source_quote": "Python is required",
+                },
+                {
+                    "text": "Build APIs",
+                    "category": "responsibility",
+                    "priority": "hard",
+                    "normalized_skill": None,
+                    "minimum_years": None,
+                    "source_quote": "Build internal APIs",
+                },
+            ],
+            "ambiguities": [],
+        }
+
     def status(self):
         return {"available": True}
 
@@ -27,6 +56,23 @@ def test_jd_rules_extracts_hard_skill_and_years(sample_request):
     assert any(req.normalized_skill == "python" and req.priority.value == "hard" for req in parsed.requirements)
     assert any(req.minimum_years == 2 for req in parsed.requirements)
     assert trace.status == "completed"
+
+
+def test_llm_jd_preserves_concrete_requirements_and_downgrades_semantic_clause():
+    text = "Backend Engineer\nPython is required\nBuild internal APIs"
+    parsed, trace = JDAnalyzer(FakeJDOllama()).analyze(text, "ollama")
+    assert trace.status == "completed"
+    python = next(item for item in parsed.requirements if item.normalized_skill == "python")
+    responsibility = next(item for item in parsed.requirements if item.category == "responsibility")
+    assert python.priority.value == "hard"
+    assert responsibility.priority.value == "context"
+
+
+def test_optional_number_coercion_accepts_llm_text_formats():
+    assert coerce_optional_number("3+ years") == 3.0
+    assert coerce_optional_number("about 2.5 years") == 2.5
+    assert coerce_optional_number(None) is None
+    assert coerce_optional_number("unknown") is None
 
 
 def test_candidate_project_evidence_is_strong(sample_request):

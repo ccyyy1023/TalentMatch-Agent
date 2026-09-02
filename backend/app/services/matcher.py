@@ -8,6 +8,17 @@ from app.schemas import (
 from app.services.skill_catalog import display_name, lexical_relatedness
 
 
+# Each priority receives a fixed share of the final score. Averaging inside a
+# priority group prevents a verbose JD with many context clauses from diluting
+# the influence of hard requirements. Missing groups are ignored and the
+# remaining shares are normalized.
+PRIORITY_GROUP_WEIGHTS = {
+    Priority.hard: 0.85,
+    Priority.preferred: 0.10,
+    Priority.context: 0.05,
+}
+
+
 class MatchingEngine:
     def __init__(self, semantic_similarity: Callable[[str, str], float] | None = None):
         self.semantic_similarity = semantic_similarity
@@ -15,16 +26,11 @@ class MatchingEngine:
     def match(self, job: ParsedJD, candidate: ParsedCandidate) -> CandidateResult:
         criteria: list[CriterionMatch] = []
         all_matched_evidence: dict[str, Evidence] = {}
-        weighted_sum = 0.0
-        weight_total = 0.0
         findings: list[ReviewFinding] = []
 
         for requirement in job.requirements:
-            weight = {Priority.hard: 1.5, Priority.preferred: 0.75, Priority.context: 0.35}[requirement.priority]
             criterion = self._match_requirement(requirement, candidate)
             criteria.append(criterion)
-            weighted_sum += criterion.score * weight
-            weight_total += weight
             for evidence_id in criterion.evidence_ids:
                 evidence = next((ev for ev in candidate.evidence if ev.id == evidence_id), None)
                 if evidence:
@@ -41,7 +47,19 @@ class MatchingEngine:
                     evidence_ids=criterion.evidence_ids,
                 ))
 
-        score = round(100 * weighted_sum / weight_total, 2) if weight_total else 0.0
+        grouped_scores: dict[Priority, list[float]] = {priority: [] for priority in Priority}
+        for criterion in criteria:
+            grouped_scores[criterion.priority].append(criterion.score)
+        active_groups = {
+            priority: sum(values) / len(values)
+            for priority, values in grouped_scores.items()
+            if values
+        }
+        active_weight = sum(PRIORITY_GROUP_WEIGHTS[priority] for priority in active_groups)
+        score = round(
+            100 * sum(PRIORITY_GROUP_WEIGHTS[priority] * value for priority, value in active_groups.items()) / active_weight,
+            2,
+        ) if active_weight else 0.0
         hard_missing = any(item.priority == Priority.hard and item.status == MatchStatus.missing for item in criteria)
         weak_count = sum(item.status in {MatchStatus.partial, MatchStatus.review} for item in criteria)
         confidence = max(0.25, min(0.98, 0.94 - 0.08 * weak_count - 0.12 * len(candidate.parse_warnings)))

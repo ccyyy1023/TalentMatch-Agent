@@ -31,10 +31,11 @@ def test_ollama_client_reuses_cached_json_without_second_http_call(tmp_path: Pat
         def json(self):
             return {"message": {"content": '{"ok": true}'}}
 
-    calls = {"post": 0}
+    calls = {"post": 0, "payload": None}
 
     def fake_post(*args, **kwargs):
         calls["post"] += 1
+        calls["payload"] = kwargs["json"]
         return FakeResponse()
 
     monkeypatch.setattr("app.services.ollama_client.httpx.post", fake_post)
@@ -44,6 +45,10 @@ def test_ollama_client_reuses_cached_json_without_second_http_call(tmp_path: Pat
     second = client.generate_json("system", "user", cache_namespace="test", prompt_version="v1")
     assert first == second == {"ok": True}
     assert calls["post"] == 1
+    assert calls["payload"]["model"] == client.chat_model
+    assert calls["payload"]["format"] == "json"
+    assert calls["payload"]["think"] is False
+    assert calls["payload"]["options"]["num_predict"] == 1536
     assert client.last_call_cache_hit is True
 
 

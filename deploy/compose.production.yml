@@ -37,6 +37,10 @@ services:
       TALENTMATCH_TASK_BACKEND: redis
       TALENTMATCH_REDIS_URL: redis://:${TALENTMATCH_REDIS_PASSWORD}@redis:6379/0
       TALENTMATCH_OLLAMA_BASE_URL: ${TALENTMATCH_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      TALENTMATCH_CHAT_MODEL: ${TALENTMATCH_CHAT_MODEL:-qwen3:4b}
+      TALENTMATCH_JD_MODEL: ${TALENTMATCH_JD_MODEL:-qwen3:4b}
+      TALENTMATCH_CANDIDATE_MODEL: ${TALENTMATCH_CANDIDATE_MODEL:-qwen3:4b}
+      TALENTMATCH_REVIEWER_MODEL: ${TALENTMATCH_REVIEWER_MODEL:-qwen2.5:7b}
       TALENTMATCH_ALLOW_ORIGINS: ${TALENTMATCH_ALLOW_ORIGINS:-http://localhost:8080}
     command: ["python", "-m", "alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
     depends_on:

@@ -1,49 +1,49 @@
 {
-  "run_id": "run-e6f0293ef8b4",
+  "run_id": "run-6589c9f02699",
   "ranking": [
     {
       "candidate_id": "cand-001",
-      "score": 96.66,
+      "score": 98.62,
       "recommendation": "recommended"
     },
     {
       "candidate_id": "cand-002",
-      "score": 89.98,
+      "score": 90.83,
       "recommendation": "manual_review"
     },
     {
       "candidate_id": "cand-004",
-      "score": 79.96,
+      "score": 81.67,
       "recommendation": "manual_review"
     },
     {
       "candidate_id": "cand-005",
-      "score": 75.67,
+      "score": 77.79,
       "recommendation": "manual_review"
     },
     {
       "candidate_id": "cand-003",
-      "score": 68.38,
+      "score": 73.87,
       "recommendation": "manual_review"
     },
     {
       "candidate_id": "cand-008",
-      "score": 44.03,
-      "recommendation": "hard_requirement_not_met"
+      "score": 43.83,
+      "recommendation": "insufficient_hard_requirement_evidence"
     },
     {
       "candidate_id": "cand-006",
-      "score": 29.76,
-      "recommendation": "hard_requirement_not_met"
+      "score": 34.71,
+      "recommendation": "insufficient_hard_requirement_evidence"
     },
     {
       "candidate_id": "cand-007",
-      "score": 26.52,
-      "recommendation": "hard_requirement_not_met"
+      "score": 32.62,
+      "recommendation": "insufficient_hard_requirement_evidence"
     }
   ],
   "metrics": {
-    "run_id": "run-e6f0293ef8b4",
+    "run_id": "run-6589c9f02699",
     "candidate_count": 8,
     "labeled_count": 8,
     "ndcg_at_5": 1.0,
@@ -59,37 +59,37 @@
       "node": "jd_analyzer_agent",
       "status": "completed",
       "detail": "规则抽取11项岗位要求",
-      "elapsed_ms": 13.6529999999766
+      "elapsed_ms": 15.512500000113505
     },
     {
       "node": "candidate_evidence_agents",
       "status": "completed",
-      "detail": "解析8份候选人材料（rules:8）",
-      "elapsed_ms": 7.712399999945774
+      "detail": "解析8份候选人材料（rules:8，LLM路由:0/8，并行度:1）",
+      "elapsed_ms": 12.000500000795
     },
     {
       "node": "deterministic_matching_engine",
       "status": "completed",
       "detail": "使用透明权重、硬性条件和证据强度完成评分；敏感属性未进入评分",
-      "elapsed_ms": 0.8463000012852717
+      "elapsed_ms": 3.4058000001095934
     },
     {
       "node": "conflict_reviewer_agent",
       "status": "completed",
-      "detail": "复核8名候选人的弱证据、硬性条件和时间线冲突",
-      "elapsed_ms": 0.06599999869649764
+      "detail": "确定性复核8名候选人，其中0名模糊案例进入LLM复核（并行度:1）",
+      "elapsed_ms": 0.0748999991628807
     },
     {
       "node": "compliance_agent",
       "status": "completed",
       "detail": "确认关闭自动拒绝，屏蔽姓名及敏感属性，保留人工复核出口",
-      "elapsed_ms": 0.010900001143454574
+      "elapsed_ms": 0.013199998647905886
     },
     {
       "node": "ranking_and_explanation",
       "status": "completed",
       "detail": "按透明匹配分与置信度排序，并保留每项结论的证据ID",
-      "elapsed_ms": 0.006299998858594336
+      "elapsed_ms": 0.0027999994927085936
     }
   ]
 }

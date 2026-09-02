@@ -20,7 +20,6 @@ from app.services.catalog import RecruitmentCatalog
 from app.services.database import RunStore
 from app.services.document_parser import UnsupportedDocument, parse_document
 from app.services.evaluation import evaluate_run
-from app.services.ollama_client import OllamaClient
 from app.services.observability import (
     ANALYSIS_TASKS, TASK_POLLS, configure_structured_logging, metrics_payload, observe_http_request,
     record_task_observation,
@@ -51,8 +50,7 @@ app.add_middleware(
 async def request_observability(request: Request, call_next):
     return await observe_http_request(request, call_next)
 
-ollama = OllamaClient()
-workflow = TalentMatchWorkflow(ollama)
+workflow = TalentMatchWorkflow()
 store = RunStore()
 if settings.task_backend == "redis":
     task_manager = RedisAnalysisTaskManager()
@@ -106,7 +104,7 @@ def health() -> dict:
     return {
         "status": "ok" if database["available"] and task_queue["available"] else "degraded",
         "service": "talentmatch-agent",
-        "ollama": ollama.status(), "model_cache": ollama.cache_status(),
+        "ollama": workflow.status(), "model_cache": workflow.cache_status(),
         "database": database, "task_queue": task_queue,
     }
 

@@ -1,4 +1,4 @@
-from app.services.controlled_benchmark import JOB_SPECS, build_candidates, build_job
+from app.services.controlled_benchmark import JOB_SPECS, build_candidates, build_job, run_controlled_benchmark
 from app.services.skill_catalog import extract_skills
 
 
@@ -22,3 +22,12 @@ def test_sensitive_pair_changes_only_identity_line():
         assert expert.skills == sensitive.skills
         assert expert.years == sensitive.years
         assert expert.education == sensitive.education
+
+
+def test_controlled_jd_category_and_priority_classification():
+    result = run_controlled_benchmark()
+    classification = result["jd_requirement_classification"]
+    assert classification["scope"]["labeled_requirements"] == 48
+    assert classification["exact_category_and_priority"]["f1"] == 1.0
+    assert classification["category_accuracy"] == 1.0
+    assert classification["priority_accuracy"] == 1.0

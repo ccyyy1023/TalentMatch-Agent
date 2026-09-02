@@ -10,7 +10,14 @@ class Settings:
     project_root: Path = Path(__file__).resolve().parents[2]
     llm_provider: str = os.getenv("TALENTMATCH_LLM_PROVIDER", "ollama")
     ollama_base_url: str = os.getenv("TALENTMATCH_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    chat_model: str = os.getenv("TALENTMATCH_CHAT_MODEL", "qwen2.5:7b")
+    chat_model: str = os.getenv("TALENTMATCH_CHAT_MODEL", "qwen3:4b")
+    jd_model: str = os.getenv("TALENTMATCH_JD_MODEL", os.getenv("TALENTMATCH_CHAT_MODEL", "qwen3:4b"))
+    candidate_model: str = os.getenv(
+        "TALENTMATCH_CANDIDATE_MODEL", os.getenv("TALENTMATCH_CHAT_MODEL", "qwen3:4b"),
+    )
+    reviewer_model: str = os.getenv(
+        "TALENTMATCH_REVIEWER_MODEL", os.getenv("TALENTMATCH_CHAT_MODEL", "qwen2.5:7b"),
+    )
     embed_model: str = os.getenv("TALENTMATCH_EMBED_MODEL", "embeddinggemma")
     ollama_workers_raw: str = os.getenv("TALENTMATCH_OLLAMA_WORKERS", "2")
     auth_session_hours_raw: str = os.getenv("TALENTMATCH_AUTH_SESSION_HOURS", "8")

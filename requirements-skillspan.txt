@@ -1,0 +1,4 @@
+# Optional offline benchmark dependencies. Keep heavy ML packages out of the API image.
+torch>=2.7,<3
+transformers>=4.50,<6
+safetensors>=0.5,<1

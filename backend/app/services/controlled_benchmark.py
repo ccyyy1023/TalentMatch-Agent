@@ -65,6 +65,7 @@ def build_job(spec: JobSpec) -> str:
         f"必须熟练掌握{_names(spec.hard)}。\n"
         f"要求本科及以上学历，至少{spec.years}年相关开发经验。\n"
         f"熟悉{SKILL_TEXT[spec.preferred]}者优先。\n"
+        "负责推动跨团队交付和技术方案评审。\n"
         f"本岗位无需{SKILL_TEXT[spec.decoy]}。"
     )
 
@@ -142,6 +143,27 @@ def _set_prf(predicted: set[tuple], expected: set[tuple]) -> dict[str, float | i
     return {"tp": tp, "fp": fp, "fn": fn, "precision": round(precision, 4), "recall": round(recall, 4), "f1": round(f1, 4)}
 
 
+def _requirement_key(requirement) -> tuple[str, str] | None:
+    if requirement.category == "skill" and requirement.normalized_skill:
+        return "skill", requirement.normalized_skill
+    if requirement.category == "experience" and requirement.minimum_years is not None:
+        return "experience", f"{requirement.minimum_years:g}"
+    if requirement.category == "education":
+        return "education", "minimum_degree"
+    if requirement.category == "responsibility":
+        return "responsibility", "delivery_responsibility"
+    return None
+
+
+def _expected_job_requirements(spec: JobSpec) -> dict[tuple[str, str], tuple[str, str]]:
+    expected = {("skill", skill): ("skill", "hard") for skill in spec.hard}
+    expected[("skill", spec.preferred)] = ("skill", "preferred")
+    expected[("experience", f"{spec.years:g}")] = ("experience", "hard")
+    expected[("education", "minimum_degree")] = ("education", "hard")
+    expected[("responsibility", "delivery_responsibility")] = ("responsibility", "context")
+    return expected
+
+
 def run_controlled_benchmark() -> dict:
     ollama = OllamaClient()
     jd_analyzer = JDAnalyzer(ollama)
@@ -150,6 +172,8 @@ def run_controlled_benchmark() -> dict:
     reviewer = ConflictReviewer(ollama)
     expected_jd_skills: set[tuple] = set()
     predicted_jd_skills: set[tuple] = set()
+    expected_jd_requirements: dict[tuple[str, str, str], tuple[str, str]] = {}
+    predicted_jd_requirements: dict[tuple[str, str, str], tuple[str, str]] = {}
     expected_candidate_skills: set[tuple] = set()
     predicted_candidate_skills: set[tuple] = set()
     expected_conflicts: set[tuple] = set()
@@ -166,6 +190,12 @@ def run_controlled_benchmark() -> dict:
         expected = set((*spec.hard, spec.preferred))
         expected_jd_skills |= {(spec.key, skill) for skill in expected}
         predicted_jd_skills |= {(spec.key, req.normalized_skill) for req in parsed_job.requirements if req.normalized_skill}
+        for key, labels in _expected_job_requirements(spec).items():
+            expected_jd_requirements[(spec.key, *key)] = labels
+        for requirement in parsed_job.requirements:
+            key = _requirement_key(requirement)
+            if key is not None:
+                predicted_jd_requirements[(spec.key, *key)] = (requirement.category, requirement.priority.value)
         gold_candidates = build_candidates(spec)
         labels = {gold.item.id: gold.item.relevance_label or 0 for gold in gold_candidates}
         results = []
@@ -204,10 +234,31 @@ def run_controlled_benchmark() -> dict:
         return round(sum(values) / len(values), 4) if values else 0.0
 
     metric_keys = ("ndcg_at_5", "precision_at_3", "recall_at_5", "mrr")
+    expected_exact = {(*key, *labels) for key, labels in expected_jd_requirements.items()}
+    predicted_exact = {(*key, *labels) for key, labels in predicted_jd_requirements.items()}
+    classification_total = len(expected_jd_requirements)
+    category_correct = sum(
+        predicted_jd_requirements.get(key, (None, None))[0] == labels[0]
+        for key, labels in expected_jd_requirements.items()
+    )
+    priority_correct = sum(
+        predicted_jd_requirements.get(key, (None, None))[1] == labels[1]
+        for key, labels in expected_jd_requirements.items()
+    )
     return {
         "benchmark": "Chinese controlled synthetic evidence suite",
         "scope": {"job_queries": len(JOB_SPECS), "candidate_documents": candidate_count, "candidate_job_pairs": candidate_count},
         "jd_skill_extraction": _set_prf(predicted_jd_skills, expected_jd_skills),
+        "jd_requirement_classification": {
+            "scope": {
+                "labeled_requirements": classification_total,
+                "categories": ["skill", "experience", "education", "responsibility"],
+                "priorities": ["hard", "preferred", "context"],
+            },
+            "exact_category_and_priority": _set_prf(predicted_exact, expected_exact),
+            "category_accuracy": round(category_correct / classification_total, 4) if classification_total else 0.0,
+            "priority_accuracy": round(priority_correct / classification_total, 4) if classification_total else 0.0,
+        },
         "candidate_skill_extraction": _set_prf(predicted_candidate_skills, expected_candidate_skills),
         "candidate_field_accuracy": {
             "years_experience": round(years_correct / candidate_count, 4),
@@ -228,6 +279,7 @@ def run_controlled_benchmark() -> dict:
         },
         "limitations": [
             "Cases are template-generated controlled tests, not real resumes or independent human annotations.",
+            "JD category and priority metrics cover explicit controlled phrases, not ambiguous real-world job descriptions.",
             "Results measure deterministic boundary handling and regression safety, not production hiring validity.",
             "The six job families cover only skills present in the current normalization catalog.",
         ],

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.schemas import Evidence, ParsedCandidate
 from app.services.baselines import keyword_coverage_ranking
 from app.services.evaluation import evaluate_run, ranking_metrics
+from app.services.ollama_client import OllamaClient
 from app.services.workflow import TalentMatchWorkflow
 
 
@@ -14,6 +15,34 @@ def test_rules_workflow_runs_end_to_end(sample_request):
     assert response.traces[0].node == "jd_analyzer_agent"
     assert response.traces[-1].node == "ranking_and_explanation"
     assert response.compliance.automatic_rejection_enabled is False
+
+
+def test_workflow_supports_independent_models_per_llm_agent():
+    jd_client = OllamaClient(chat_model="jd-model")
+    candidate_client = OllamaClient(chat_model="candidate-model")
+    reviewer_client = OllamaClient(chat_model="reviewer-model")
+    workflow = TalentMatchWorkflow(
+        jd_ollama=jd_client,
+        candidate_ollama=candidate_client,
+        reviewer_ollama=reviewer_client,
+    )
+    assert workflow.agent_models == {
+        "jd_analyzer": "jd-model",
+        "candidate_analyzer": "candidate-model",
+        "conflict_reviewer": "reviewer-model",
+    }
+    assert workflow.jd_analyzer.ollama is jd_client
+    assert workflow.candidate_analyzer.ollama is candidate_client
+    assert workflow.reviewer.ollama is reviewer_client
+
+
+def test_legacy_shared_model_constructor_remains_supported():
+    shared = OllamaClient(chat_model="shared-model")
+    workflow = TalentMatchWorkflow(shared)
+    assert workflow.jd_ollama is shared
+    assert workflow.candidate_ollama is shared
+    assert workflow.reviewer_ollama is shared
+    assert set(workflow.agent_models.values()) == {"shared-model"}
 
 
 def test_workflow_reports_monotonic_node_progress(sample_request):

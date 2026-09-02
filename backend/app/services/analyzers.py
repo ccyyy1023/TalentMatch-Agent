@@ -13,6 +13,15 @@ HARD_MARKERS = ("必须", "要求", "精通", "熟练掌握", "至少", "不少�
 PREFERRED_MARKERS = ("优先", "加分", "最好", "熟悉", "了解")
 
 
+def coerce_optional_number(value) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"\d+(?:\.\d+)?", str(value))
+    return float(match.group()) if match else None
+
+
 def split_units(text: str) -> list[str]:
     units = re.split(r"[\n。；;]+", text)
     return [re.sub(r"^[\s\-•·\d.、）)]+", "", unit).strip() for unit in units if unit.strip()]
@@ -35,7 +44,9 @@ class JDAnalyzer:
             except Exception as exc:
                 parsed = self._analyze_rules(text)
                 return parsed, TraceEvent(
-                    node="jd_analyzer_agent", status="fallback", detail=f"模型抽取失败，已回退规则：{type(exc).__name__}", elapsed_ms=(perf_counter() - started) * 1000
+                    node="jd_analyzer_agent", status="fallback",
+                    detail=f"模型抽取失败，已回退规则：{type(exc).__name__}:{str(exc)[:80]}",
+                    elapsed_ms=(perf_counter() - started) * 1000,
                 )
         parsed = self._analyze_rules(text)
         return parsed, TraceEvent(
@@ -48,8 +59,9 @@ class JDAnalyzer:
             "输出JSON，字段为title、summary、requirements、ambiguities。requirements每项包含"
             "text、category(skill/experience/education/responsibility/other)、priority(hard/preferred/context)、"
             "normalized_skill、minimum_years、source_quote。source_quote必须是输入中的连续原文。"
+            "requirements只保留对筛选有区分度的要求，总数不超过20项，字段内容保持简洁。"
         )
-        raw = self.ollama.generate_json(system, text, cache_namespace="jd_analyzer", prompt_version="jd-v2")
+        raw = self.ollama.generate_json(system, text, cache_namespace="jd_analyzer", prompt_version="jd-v3")
         requirements: list[Requirement] = []
         for index, item in enumerate(raw.get("requirements", []), start=1):
             quote = str(item.get("source_quote") or item.get("text") or "").strip()
@@ -64,20 +76,26 @@ class JDAnalyzer:
                 category=item.get("category") if item.get("category") in {"skill", "experience", "education", "responsibility", "other"} else "other",
                 priority=item.get("priority") if item.get("priority") in {"hard", "preferred", "context"} else "context",
                 normalized_skill=normalized,
-                minimum_years=item.get("minimum_years"),
+                minimum_years=coerce_optional_number(item.get("minimum_years")),
                 source_quote=quote,
             ))
         if not requirements:
             raise OllamaUnavailable("模型没有返回可核验的岗位要求")
         rules_parsed = self._analyze_rules(text)
-        requirements = [
-            item.model_copy(update={"priority": Priority.context})
-            for item in requirements
-            if item.category in {"responsibility", "other"}
-            and not extract_skills(item.source_quote)
-            and not re.search(r"\d+(?:\.\d+)?\s*年", item.source_quote)
-            and not re.search(r"博士|硕士|本科|大专", item.source_quote)
-        ]
+        # Semantic responsibility/other clauses must not become automatic hard
+        # filters. Preserve concrete skill, experience and education items;
+        # the previous list filter accidentally discarded all of them.
+        normalized_requirements: list[Requirement] = []
+        for item in requirements:
+            if (
+                item.category in {"responsibility", "other"}
+                and not extract_skills(item.source_quote)
+                and not re.search(r"\d+(?:\.\d+)?\s*年", item.source_quote)
+                and not re.search(r"博士|硕士|本科|大专", item.source_quote)
+            ):
+                item = item.model_copy(update={"priority": Priority.context})
+            normalized_requirements.append(item)
+        requirements = normalized_requirements
         existing_keys = {(item.category, item.normalized_skill, item.minimum_years, item.source_quote) for item in requirements}
         for item in rules_parsed.requirements:
             key = (item.category, item.normalized_skill, item.minimum_years, item.source_quote)
@@ -176,8 +194,9 @@ class CandidateAnalyzer:
             "section只能为work、project、skills、education、summary、unknown；"
             "工作或项目证据strength最高1，技能列表不高于0.65，自我评价不高于0.45。"
             "normalized_skill优先使用python、fastapi、langgraph、langchain、rag、postgresql、docker等小写规范名。"
+            "只保留最能支持筛选判断的证据，每类最多2条、总数不超过6条，value保持简洁。"
         )
-        raw = self.ollama.generate_json(system, text, cache_namespace="candidate_analyzer", prompt_version="candidate-v2")
+        raw = self.ollama.generate_json(system, text, cache_namespace="candidate_analyzer", prompt_version="candidate-v3")
         evidence: list[Evidence] = []
         for index, item in enumerate(raw.get("evidence", []), start=1):
             quote = str(item.get("source_quote") or "").strip()
@@ -190,7 +209,7 @@ class CandidateAnalyzer:
             kind = item.get("kind") if item.get("kind") in {"skill", "experience", "education", "project", "achievement", "other"} else "other"
             evidence.append(Evidence(
                 id=f"{candidate_id}-ev-{index}", kind=kind, value=str(item.get("value") or quote),
-                normalized_skill=normalized, years=item.get("years"), source_quote=quote, section=section,
+                normalized_skill=normalized, years=coerce_optional_number(item.get("years")), source_quote=quote, section=section,
                 strength=strength,
             ))
         if not evidence:

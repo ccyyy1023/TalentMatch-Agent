@@ -5,6 +5,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
 node_modules/
 dist/
 data/talentmatch.db

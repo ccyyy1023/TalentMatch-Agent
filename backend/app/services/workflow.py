@@ -28,12 +28,82 @@ class WorkflowState(TypedDict, total=False):
 
 
 class TalentMatchWorkflow:
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
-        self.jd_analyzer = JDAnalyzer(self.ollama)
-        self.candidate_analyzer = CandidateAnalyzer(self.ollama)
-        self.reviewer = ConflictReviewer(self.ollama)
+    def __init__(
+        self,
+        ollama: OllamaClient | None = None,
+        *,
+        jd_ollama: OllamaClient | None = None,
+        candidate_ollama: OllamaClient | None = None,
+        reviewer_ollama: OllamaClient | None = None,
+    ):
+        # Passing the legacy ``ollama`` argument intentionally shares one
+        # client across every role. Without it, each Agent can select a model
+        # independently while retaining the same deterministic workflow.
+        self.jd_ollama = jd_ollama or ollama or OllamaClient(chat_model=settings.jd_model)
+        self.candidate_ollama = candidate_ollama or ollama or OllamaClient(chat_model=settings.candidate_model)
+        self.reviewer_ollama = reviewer_ollama or ollama or OllamaClient(chat_model=settings.reviewer_model)
+        self.ollama = self.candidate_ollama  # backwards-compatible embedding/client handle
+        self.jd_analyzer = JDAnalyzer(self.jd_ollama)
+        self.candidate_analyzer = CandidateAnalyzer(self.candidate_ollama)
+        self.reviewer = ConflictReviewer(self.reviewer_ollama)
         self.graph = self._build_graph()
+
+    @property
+    def agent_models(self) -> dict[str, str]:
+        return {
+            "jd_analyzer": self.jd_ollama.chat_model,
+            "candidate_analyzer": self.candidate_ollama.chat_model,
+            "conflict_reviewer": self.reviewer_ollama.chat_model,
+        }
+
+    def _unique_clients(self) -> list[OllamaClient]:
+        clients = (self.jd_ollama, self.candidate_ollama, self.reviewer_ollama)
+        return list({id(client): client for client in clients}.values())
+
+    def status(self) -> dict:
+        # Agent roles currently share one Ollama endpoint. Query its model list
+        # once so splitting role clients does not triple health-check latency.
+        endpoint_status = self.candidate_ollama.status()
+        models = endpoint_status.get("models", [])
+
+        def role(model: str) -> dict:
+            return {
+                "available": endpoint_status.get("available", False),
+                "model": model,
+                "chat_model_ready": any(name.split(":")[0] == model.split(":")[0] for name in models),
+            }
+
+        role_status = {
+            "jd_analyzer": role(self.jd_ollama.chat_model),
+            "candidate_analyzer": role(self.candidate_ollama.chat_model),
+            "conflict_reviewer": role(self.reviewer_ollama.chat_model),
+        }
+        return {
+            "available": endpoint_status.get("available", False),
+            "models": models,
+            "chat_model_ready": all(item.get("chat_model_ready", False) for item in role_status.values()),
+            "embed_model_ready": endpoint_status.get("embed_model_ready", False),
+            "agent_models": self.agent_models,
+            "roles": role_status,
+        }
+
+    def cache_status(self) -> dict:
+        unique_stats = [client.cache_status() for client in self._unique_clients()]
+        role_stats = {
+            "jd_analyzer": self.jd_ollama.cache_status(),
+            "candidate_analyzer": self.candidate_ollama.cache_status(),
+            "conflict_reviewer": self.reviewer_ollama.cache_status(),
+        }
+        return {
+            "enabled": all(item.get("enabled", False) for item in unique_stats),
+            "session_hits": sum(item.get("session_hits", 0) for item in unique_stats),
+            "session_misses": sum(item.get("session_misses", 0) for item in unique_stats),
+            # Every role uses the same persistent cache database by default;
+            # use max rather than summing the same global counters three times.
+            "entries": max((item.get("entries", 0) for item in unique_stats), default=0),
+            "hits": max((item.get("hits", 0) for item in unique_stats), default=0),
+            "roles": role_stats,
+        }
 
     def _build_graph(self):
         graph = StateGraph(WorkflowState)
@@ -61,24 +131,26 @@ class TalentMatchWorkflow:
         progress_callback: Callable[[str, int, str], None] | None = None,
     ) -> AnalysisResponse:
         started = perf_counter()
-        cache_hits_before = self.ollama.cache_hits
-        cache_misses_before = self.ollama.cache_misses
+        clients = self._unique_clients()
+        cache_hits_before = sum(client.cache_hits for client in clients)
+        cache_misses_before = sum(client.cache_misses for client in clients)
         initial_state: WorkflowState = {"request": request, "traces": []}
         if progress_callback is not None:
             initial_state["progress_callback"] = progress_callback
         final = self.graph.invoke(initial_state)
-        model_status = self.ollama.status()
-        cache_status = self.ollama.cache_status()
-        cache_status["run_hits"] = self.ollama.cache_hits - cache_hits_before
-        cache_status["run_misses"] = self.ollama.cache_misses - cache_misses_before
+        model_status = self.status()
+        cache_status = self.cache_status()
+        cache_status["run_hits"] = sum(client.cache_hits for client in clients) - cache_hits_before
+        cache_status["run_misses"] = sum(client.cache_misses for client in clients) - cache_misses_before
         return AnalysisResponse(
             run_id=f"run-{uuid4().hex[:12]}", mode=request.mode, job=final["job"], ranking=final["results"],
             compliance=final["compliance"], traces=final["traces"],
             elapsed_ms=round((perf_counter() - started) * 1000, 2),
             model_info={
                 "provider": "ollama" if request.mode in {"ollama", "adaptive"} else "deterministic",
-                "chat_model": self.ollama.chat_model,
-                "embed_model": self.ollama.embed_model,
+                "chat_model": self.candidate_ollama.chat_model,
+                "agent_models": self.agent_models,
+                "embed_model": self.candidate_ollama.embed_model,
                 "criteria_confirmed_by_human": request.criteria_confirmed_by_human,
                 "cache": cache_status,
                 **model_status,
@@ -153,7 +225,7 @@ class TalentMatchWorkflow:
         results = [engine.match(state["job"], candidate) for candidate in state["candidates"]]
         trace = TraceEvent(
             node="deterministic_matching_engine", status="completed",
-            detail="使用透明权重、硬性条件和证据强度完成评分；敏感属性未进入评分",
+            detail="按硬性、加分项和上下文分组权重结合证据强度完成评分；敏感属性未进入评分",
             elapsed_ms=(perf_counter() - started) * 1000,
         )
         self._notify(state, "matching_ready", 60, trace.detail)
