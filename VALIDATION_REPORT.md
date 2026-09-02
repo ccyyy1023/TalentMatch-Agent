@@ -218,7 +218,7 @@ JTH原始文件已从Zenodo下载，3个CSV均通过官方MD5校验。评分权�
 - `/metrics`实际产生HTTP请求、任务结果、队列等待和Agent节点耗时指标；前端开发服务返回HTTP 200；
 - 验收结束后已停止临时前后端进程并删除独立数据库及WAL/SHM文件，未写入现有业务数据库。
 
-本轮同时加入GitHub Actions配置，但只完成本地等价命令验证；在代码推送到GitHub并由Actions执行前，不能声称远端CI已经通过。
+GitHub Actions已在公开仓库实际执行。2026-09-02提交`96a60a8`对应CI run `33620886517`中，frontend生产构建与backend测试两个Job均通过；运行器同时给出第三方Action的Node.js 20弃用提示，但未影响本次结论。
 
 ## 2026-09-01 Reviewer 异构模型消融
 
