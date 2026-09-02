@@ -12,6 +12,7 @@ from app.schemas import (
     AnalysisRequest, AnalysisResponse, CandidateResult, ComplianceAudit, ParsedCandidate, ParsedJD, TraceEvent,
 )
 from app.services.analyzers import CandidateAnalyzer, JDAnalyzer
+from app.services.hybrid_skill_extractor import DocumentSkillExtractor, JobBertDocumentSkillExtractor
 from app.services.matcher import MatchingEngine
 from app.services.ollama_client import OllamaClient
 from app.services.reviewer import ConflictReviewer
@@ -35,6 +36,7 @@ class TalentMatchWorkflow:
         jd_ollama: OllamaClient | None = None,
         candidate_ollama: OllamaClient | None = None,
         reviewer_ollama: OllamaClient | None = None,
+        skill_extractor: DocumentSkillExtractor | None = None,
     ):
         # Passing the legacy ``ollama`` argument intentionally shares one
         # client across every role. Without it, each Agent can select a model
@@ -42,8 +44,11 @@ class TalentMatchWorkflow:
         self.jd_ollama = jd_ollama or ollama or OllamaClient(chat_model=settings.jd_model)
         self.candidate_ollama = candidate_ollama or ollama or OllamaClient(chat_model=settings.candidate_model)
         self.reviewer_ollama = reviewer_ollama or ollama or OllamaClient(chat_model=settings.reviewer_model)
+        self.skill_extractor = skill_extractor
+        if self.skill_extractor is None and settings.skill_extractor == "jobbert":
+            self.skill_extractor = JobBertDocumentSkillExtractor(settings.jobbert_cache_dir)
         self.ollama = self.candidate_ollama  # backwards-compatible embedding/client handle
-        self.jd_analyzer = JDAnalyzer(self.jd_ollama)
+        self.jd_analyzer = JDAnalyzer(self.jd_ollama, self.skill_extractor)
         self.candidate_analyzer = CandidateAnalyzer(self.candidate_ollama)
         self.reviewer = ConflictReviewer(self.reviewer_ollama)
         self.graph = self._build_graph()
@@ -151,6 +156,7 @@ class TalentMatchWorkflow:
                 "chat_model": self.candidate_ollama.chat_model,
                 "agent_models": self.agent_models,
                 "embed_model": self.candidate_ollama.embed_model,
+                "skill_extractor": "jobbert" if self.skill_extractor is not None else "catalog_and_llm",
                 "criteria_confirmed_by_human": request.criteria_confirmed_by_human,
                 "cache": cache_status,
                 **model_status,
@@ -175,14 +181,23 @@ class TalentMatchWorkflow:
         started = perf_counter()
         request_mode = state["request"].mode
         workers = settings.ollama_workers if request_mode in {"ollama", "adaptive"} else 1
+        target_skills = [
+            item.normalized_skill
+            for item in state.get("job", ParsedJD()).requirements
+            if item.normalized_skill
+        ]
 
         def analyze_item(item):
-            return self.candidate_analyzer.analyze(item.id, item.name, item.text, request_mode)
+            return self.candidate_analyzer.analyze(
+                item.id, item.name, item.text, request_mode, target_skills=target_skills,
+            )
 
         routed_to_llm = len(state["request"].candidates) if request_mode == "ollama" else 0
         if request_mode == "adaptive":
             base = [
-                self.candidate_analyzer.analyze(item.id, item.name, item.text, "rules")
+                self.candidate_analyzer.analyze(
+                    item.id, item.name, item.text, "rules", target_skills=target_skills,
+                )
                 for item in state["request"].candidates
             ]
             selected = [index for index, (candidate, _) in enumerate(base) if self._needs_llm_enrichment(candidate)]
@@ -190,7 +205,9 @@ class TalentMatchWorkflow:
 
             def enrich(index):
                 item = state["request"].candidates[index]
-                return index, self.candidate_analyzer.analyze(item.id, item.name, item.text, "ollama")
+                return index, self.candidate_analyzer.analyze(
+                    item.id, item.name, item.text, "ollama", target_skills=target_skills,
+                )
 
             enriched = {}
             if selected:
